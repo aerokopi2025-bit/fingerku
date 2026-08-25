@@ -1,22 +1,21 @@
-# fingerku (Go ZKTeco Standalone Library & CLI)
+# fingerku (Go ZKTeco Standalone Library, CLI & REST API)
 
-`fingerku` adalah library dan CLI tool mandiri (*pure Go*) untuk berkomunikasi langsung dengan mesin absensi dan access control biometrik **ZKTeco / ZKSoftware** melalui protokol socket jaringan (TCP & UDP, default port `4370`), tanpa memerlukan SDK resmi Windows DLL/COM.
+`fingerku` adalah library, CLI tool, dan REST API server mandiri (*pure Go*) untuk berkomunikasi langsung dengan mesin absensi dan access control biometrik **ZKTeco / ZKSoftware** melalui protokol socket jaringan (TCP & UDP, default port `4370`), tanpa memerlukan SDK resmi Windows DLL/COM.
 
-Dilengkapi dengan penyimpanan lokal **SQLite (`fingerku.db`)**, fitur **Live Capture Streaming**, dan background service **Runner Daemon**.
+Dilengkapi dengan penyimpanan lokal **SQLite (`fingerku.db`)**, REST API router berbasis **`go-chi/chi/v5`**, fitur **Live Capture Streaming (SSE)**, dan background service **Runner Daemon**.
 
 ---
 
 ## Fitur Utama
 
-- 🚀 **Pure Go & Zero Heavy Dependencies**: Hanya menggunakan standard library Go dan SQLite embedded driver (`modernc.org/sqlite`).
-- 🔄 **TCP & UDP Transport**: Mendukung protokol TCP (dengan framing header `0x5050`) dan UDP.
-- 🗄️ **SQLite DB-First Integration**: Otomatis membaca & menyimpan konfigurasi perangkat, data user, audit history, dan riwayat presensi ke SQLite lokal.
-- ⚡ **Realtime Event Streaming (Live Capture)**: Menggunakan Go Channel (`<-chan zk.Attendance`) dan `context.Context` untuk mendengarkan event absensi secara seketika saat pegawai menempelkan jari/kartu/wajah.
-- 👥 **Manajemen User Lengkap**: Ambil daftar pengguna, tambah/update pengguna baru, hapus pengguna, dan reset hak akses admin.
-- 📊 **Log Presensi (Attendance Logs)**: Baca seluruh rekaman log absensi dari RAM mesin maupun query dari SQLite lokal.
-- 🧬 **Template Sidik Jari (Biometrics)**: Ekstraksi template sidik jari (`GetTemplates`), upload template per-user (`SaveUserTemplate`), dan hapus template.
-- 🛠️ **Kontrol Perangkat & Hardware**: Sinkronisasi waktu RTC, trigger relay kunci pintu (*door access control*), kontrol layar LCD, tes suara speaker, restart, dan shutdown.
-- 💻 **Interactive CLI & Background Service**: Dilengkapi CLI `fingerku-cli` untuk kebutuhan automasi, sync service, dan query database.
+- 🚀 **Pure Go & Zero Heavy Dependencies**: Hanya menggunakan standard library Go, Chi router (`github.com/go-chi/chi/v5`), dan SQLite embedded driver (`modernc.org/sqlite`).
+- 🌐 **Modern REST API with Chi**: RESTful API lengkap untuk integrasi dengan sistem HRIS, backend Node.js/PHP/Python/Java, atau frontend web/mobile.
+- ⚡ **Server-Sent Events (SSE)**: Streaming event absensi secara live dan seketika via `/api/v1/events`.
+- 🗄️ **SQLite DB-First Integration**: Otomatis membaca & menyimpan konfigurasi perangkat, data user, template sidik jari, audit history, dan riwayat presensi ke SQLite lokal.
+- 👥 **Manajemen User & Biometrik**: Ambil daftar pengguna, template sidik jari, tambah/update pengguna baru, hapus pengguna, dan reset hak akses admin.
+- 📊 **Log Presensi (Attendance Logs)**: Baca seluruh rekaman log absensi dari RAM mesin maupun query terfilter dari SQLite lokal.
+- 🛠️ **Kontrol Hardware**: Sinkronisasi waktu RTC, trigger relay kunci pintu (*door access control*), kontrol layar LCD, tes suara speaker, restart, dan shutdown.
+- 💻 **Interactive CLI Utility**: Dilengkapi CLI `fingerku-cli` untuk kebutuhan automasi dan operasional terminal.
 
 ---
 
@@ -25,8 +24,12 @@ Dilengkapi dengan penyimpanan lokal **SQLite (`fingerku.db`)**, fitur **Live Cap
 ```
 fingerku/
 ├── go.mod
-├── Makefile                    # Target build, run, test, clean
+├── Makefile                    # Target build, run, serve, test, clean
 ├── README.md
+├── api/                        # REST API Package (Chi Router & Handlers)
+│   ├── server.go               # Server struct, SSE broker, middleware & routes
+│   ├── handlers.go             # REST API endpoint handlers
+│   └── response.go             # Standard JSON response helpers
 ├── storage/                    # SQLite Storage Layer
 │   ├── models.go               # Struct database, DeviceConfig, AttendanceRecord
 │   ├── db.go                   # SQLite schema, CRUD operations, WAL mode
@@ -45,6 +48,8 @@ fingerku/
 │   ├── live.go                 # Live capture streaming via Go channel
 │   └── zk_test.go              # Unit tests
 └── cmd/
+    ├── fingerku-api/           # Standalone REST API Server Binary
+    │   └── main.go
     ├── fingerku-cli/           # CLI Application & Background Runner
     │   └── main.go
     └── examples/               # Contoh kode fungsional
@@ -59,33 +64,73 @@ fingerku/
 
 ## Instalasi & Build
 
-### 1. Build Binary dengan Make
 ```bash
-# Build binary CLI ke bin/fingerku-cli
+# Build binary CLI dan API server ke folder bin/
 make build
 
-# Menjalankan seluruh unit tests
-make test
+# Jalankan REST API Server (Chi) pada port 8080
+make serve
 
-# Menjalankan background service runner
+# Jalankan background runner daemon (CLI Mode)
 make dev
+
+# Menjalankan unit tests
+make test
 ```
+
+---
+
+## REST API Server (`go-chi/chi/v5`)
+
+API Server dapat dijalankan menggunakan:
+```bash
+./bin/fingerku-api --port 8080
+# atau menggunakan CLI:
+./bin/fingerku-cli serve --api-port 8080
+```
+
+### Ringkasan Endpoint API:
+
+| Method | Endpoint | Deskripsi |
+|---|---|---|
+| `GET` | `/health` | Health check service & uptime |
+| `GET` | `/api/v1/status` | Status koneksi mesin, statistik SQLite & uptime |
+| `GET` | `/api/v1/config` | Membaca konfigurasi perangkat dari SQLite |
+| `PUT` | `/api/v1/config` | Memperbarui konfigurasi perangkat di SQLite |
+| `POST` | `/api/v1/device/connect` | Menghubungkan ke mesin ZKTeco |
+| `POST` | `/api/v1/device/disconnect` | Memutuskan koneksi dari mesin |
+| `GET` | `/api/v1/device/info` | Informasi firmware, serial, MAC & kapasitas memori |
+| `POST` | `/api/v1/device/unlock` | Buka relay pintu (*access control*) `{"seconds": 5}` |
+| `POST` | `/api/v1/device/synctime` | Sinkronisasi jam RTC mesin dengan jam server |
+| `POST` | `/api/v1/device/voice` | Putar prompt suara speaker `{"index": 0}` |
+| `POST` | `/api/v1/device/restart` | Reboot mesin ZKTeco |
+| `POST` | `/api/v1/device/poweroff` | Matikan mesin ZKTeco |
+| `GET` | `/api/v1/users` | Daftar user terdaftar (beserta info role & jumlah sidik jari) |
+| `POST` | `/api/v1/users` | Tambah atau update user di mesin & SQLite |
+| `GET` | `/api/v1/users/{id}` | Detail user beserta template sidik jarinya |
+| `DELETE` | `/api/v1/users/{id}` | Hapus user dari mesin dan SQLite |
+| `GET` | `/api/v1/templates` | Daftar seluruh template sidik jari biometrik |
+| `GET` | `/api/v1/users/{id}/templates` | Daftar template sidik jari untuk user tertentu |
+| `GET` | `/api/v1/attendance` | Query log presensi SQLite (`?user_id=...&from=...&to=...&page=1&limit=50`) |
+| `GET` | `/api/v1/attendance/stats` | Ringkasan statistik absensi (total, hari ini, breakdown status) |
+| `GET` | `/api/v1/attendance/machine` | Membaca log presensi langsung dari RAM mesin (*Read-Only*) |
+| `POST` | `/api/v1/sync` | Trigger manual sinkronisasi user, sidik jari, & log ke SQLite |
+| `GET` | `/api/v1/sync/history` | Riwayat audit sinkronisasi |
+| `GET` | `/api/v1/events` | Real-time Server-Sent Events (SSE) stream untuk tap biometrik |
 
 ---
 
 ## Penggunaan CLI (`fingerku-cli`)
 
-Secara default, seluruh perintah CLI menggunakan konfigurasi target mesin yang tersimpan di **SQLite (`fingerku.db`)**. Jika flag `--ip` atau `--port` tidak disertakan, CLI akan otomatis membaca pengaturan yang tersimpan di database.
-
-### 1. Service Daemon & Konfigurasi (DB-First)
+### 1. Service & Konfigurasi (DB-First)
 ```bash
-# Jalankan background runner daemon (otomatis sync user/log & mendengarkan live punch)
+# Jalankan REST API Server
+./bin/fingerku-cli serve --api-port 8080
+
+# Jalankan background runner daemon
 ./bin/fingerku-cli run
 
-# Jalankan runner dengan auto-sync berkala (misal setiap 60 detik)
-./bin/fingerku-cli run --auto-sync-interval 60
-
-# Lihat konfigurasi mesin yang saat ini tersimpan di database
+# Lihat konfigurasi mesin yang tersimpan di database
 ./bin/fingerku-cli config
 
 # Simpan / ubah konfigurasi default mesin ke database SQLite
@@ -97,7 +142,7 @@ Secara default, seluruh perintah CLI menggunakan konfigurasi target mesin yang t
 # Tarik seluruh user, template sidik jari biometrik & log absensi dari mesin dan simpan ke SQLite
 ./bin/fingerku-cli sync-logs
 
-# Tampilkan daftar pengguna yang tersimpan di SQLite (beserta jumlah sidik jari)
+# Tampilkan daftar pengguna yang tersimpan di SQLite
 ./bin/fingerku-cli db-users
 
 # Tampilkan template sidik jari biometrik yang tersimpan di SQLite
@@ -121,7 +166,7 @@ Secara default, seluruh perintah CLI menggunakan konfigurasi target mesin yang t
 # Mengambil daftar pengguna & template sidik jari dari mesin (dan cache ke SQLite)
 ./bin/fingerku-cli users
 
-# Mengambil template sidik jari biometrik dari mesin (dan cache ke SQLite)
+# Mengambil template sidik jari biometrik dari mesin
 ./bin/fingerku-cli templates
 
 # Mengambil seluruh log absensi langsung dari RAM mesin (Read-Only)
@@ -144,90 +189,6 @@ Secara default, seluruh perintah CLI menggunakan konfigurasi target mesin yang t
 
 # Matikan mesin
 ./bin/fingerku-cli poweroff
-```
-
----
-
-## Contoh Penggunaan Go Library
-
-### 1. Inisialisasi & Koneksi
-
-```go
-package main
-
-import (
-	"fmt"
-	"log"
-	"time"
-
-	"fingerku/zk"
-)
-
-func main() {
-	client := zk.New("192.168.1.201",
-		zk.WithPort(4370),
-		zk.WithTimeout(10*time.Second),
-		zk.WithPassword(0), // isi jika mesin menggunakan commkey password
-	)
-
-	if err := client.Connect(); err != nil {
-		log.Fatalf("Gagal konek: %v", err)
-	}
-	defer client.Disconnect()
-
-	fmt.Println("Berhasil terhubung ke mesin ZKTeco!")
-}
-```
-
-### 2. Mengambil Data User & Log Presensi
-
-```go
-// Kunci perangkat sementara saat membaca data
-_ = client.DisableDevice()
-defer client.EnableDevice()
-
-// Ambil daftar user
-users, err := client.GetUsers()
-if err == nil {
-	for _, u := range users {
-		fmt.Printf("UID: %d | User ID: %s | Nama: %s | Role: %s\n",
-			u.UID, u.UserID, u.Name, u.PrivilegeName())
-	}
-}
-
-// Ambil log absensi
-records, err := client.GetAttendance()
-if err == nil {
-	for _, r := range records {
-		fmt.Printf("[%s] User: %s | Status: %s (Punch: %d)\n",
-			r.Timestamp.Format("2006-01-02 15:04:05"), r.UserID, r.StatusName(), r.Punch)
-	}
-}
-```
-
-### 3. Monitoring Absensi Real-Time (Live Capture)
-
-```go
-ctx, cancel := context.WithCancel(context.Background())
-defer cancel()
-
-events, errs := client.LiveCapture(ctx)
-
-for {
-	select {
-	case err := <-errs:
-		if err != nil {
-			log.Printf("Error: %v", err)
-		}
-		return
-	case ev, ok := <-events:
-		if !ok {
-			return
-		}
-		fmt.Printf("👉 Absensi Masuk: User ID %s pada %s (%s)\n",
-			ev.UserID, ev.Timestamp.Format("15:04:05"), ev.StatusName())
-	}
-}
 ```
 
 ---

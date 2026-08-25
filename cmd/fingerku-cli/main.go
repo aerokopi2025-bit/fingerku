@@ -4,11 +4,14 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	"fingerku/api"
 	"fingerku/storage"
 	"fingerku/zk"
 )
@@ -30,6 +33,7 @@ func main() {
 	omitPing := flagSet.Bool("omit-ping", false, "Omit ICMP ping check")
 	verbose := flagSet.Bool("verbose", false, "Enable verbose logging")
 	autoSyncInterval := flagSet.Int("auto-sync-interval", 0, "Auto-sync interval in seconds for run command")
+	apiPort := flagSet.Int("api-port", 8080, "HTTP API server port (serve command)")
 
 	// Subcommand specific flags
 	unlockSec := flagSet.Int("seconds", 3, "Unlock duration in seconds (unlock command)")
@@ -86,6 +90,8 @@ func main() {
 	switch command {
 	case "run", "daemon", "service":
 		runRunner(db, effectiveCfg, *dbPath, *verbose)
+	case "serve", "api", "server":
+		runAPIServer(db, *apiPort, *verbose, *dbPath)
 	case "config", "get-config":
 		runGetConfig(db, *dbPath)
 	case "set-config":
@@ -145,6 +151,7 @@ func printUsage() {
 	fmt.Println("\nUsage:")
 	fmt.Println("  fingerku-cli <command> [flags]")
 	fmt.Println("\nCore & Database Commands:")
+	fmt.Println("  serve        Start the REST API server powered by Chi (default port: 8080)")
 	fmt.Println("  run          Run background listener & auto-sync service using DB configuration")
 	fmt.Println("  config       Display device configuration saved in SQLite database")
 	fmt.Println("  set-config   Update and save default device configuration in SQLite database")
@@ -166,6 +173,7 @@ func printUsage() {
 	fmt.Println("  poweroff     Shutdown device")
 	fmt.Println("\nGlobal Flags:")
 	fmt.Println("  --db                 SQLite database file path (default: fingerku.db)")
+	fmt.Println("  --api-port           Port for REST API server (default: 8080, serve command)")
 	fmt.Println("  --ip                 Device IP address (overrides DB config)")
 	fmt.Println("  --port               Device port (overrides DB config, default: 4370)")
 	fmt.Println("  --password           Commkey password (overrides DB config, default: 0)")
@@ -716,4 +724,52 @@ func runPoweroff(client *zk.Client) {
 		return
 	}
 	fmt.Println("OK (Device powered off)")
+}
+
+func runAPIServer(db *storage.DB, port int, verbose bool, dbPath string) {
+	fmt.Println("================================================================")
+	fmt.Println("       🚀 Starting Fingerku REST API Server (Powered by Chi)    ")
+	fmt.Println("================================================================")
+	fmt.Printf(" • SQLite Database : %s\n", dbPath)
+	fmt.Printf(" • API URL         : http://0.0.0.0:%d\n", port)
+	fmt.Println(" • Endpoints Base  : /api/v1")
+	fmt.Println(" • Health Check    : /health")
+	fmt.Println(" • Press Ctrl+C to stop server")
+	fmt.Println("================================================================")
+
+	srv, err := api.NewServer(db, verbose)
+	if err != nil {
+		fmt.Printf("Failed to initialize API server: %v\n", err)
+		return
+	}
+
+	addr := fmt.Sprintf("0.0.0.0:%d", port)
+	httpServer := &http.Server{
+		Addr:         addr,
+		Handler:      srv.Routes(),
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 60 * time.Second,
+		IdleTimeout:  120 * time.Second,
+	}
+
+	stopChan := make(chan os.Signal, 1)
+	signal.Notify(stopChan, os.Interrupt, syscall.SIGTERM)
+
+	go func() {
+		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("HTTP server error: %v", err)
+		}
+	}()
+
+	<-stopChan
+	fmt.Println("\nShutting down API server gracefully...")
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	_ = srv.Disconnect()
+	if err := httpServer.Shutdown(shutdownCtx); err != nil {
+		log.Printf("Server forced shutdown: %v", err)
+	}
+	fmt.Println("API server stopped.")
 }

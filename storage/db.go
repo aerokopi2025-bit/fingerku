@@ -576,13 +576,70 @@ func (d *DB) LogSync(rec SyncRecord) error {
 	return err
 }
 
-// GetSyncHistory returns recent sync audit records.
+// GetUser fetches a single user by UserID or numeric UID string from SQLite.
+func (d *DB) GetUser(id string) (*zk.User, error) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+
+	var u zk.User
+	var pwd, gid sql.NullString
+	err := d.db.QueryRow(`
+		SELECT uid, user_id, name, privilege, password, group_id, card
+		FROM users
+		WHERE user_id = ? OR CAST(uid AS TEXT) = ?
+		LIMIT 1
+	`, id, id).Scan(&u.UID, &u.UserID, &u.Name, &u.Privilege, &pwd, &gid, &u.Card)
+
+	if err != nil {
+		return nil, err
+	}
+	if pwd.Valid {
+		u.Password = pwd.String
+	}
+	if gid.Valid {
+		u.GroupID = gid.String
+	}
+	return &u, nil
+}
+
+// DeleteUser removes a user and their biometric templates from SQLite.
+func (d *DB) DeleteUser(userID string, uid uint16) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	tx, err := d.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if userID != "" {
+		if _, err := tx.Exec("DELETE FROM users WHERE user_id = ?", userID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec("DELETE FROM finger_templates WHERE user_id = ?", userID); err != nil {
+			return err
+		}
+	}
+	if uid > 0 {
+		if _, err := tx.Exec("DELETE FROM users WHERE uid = ?", uid); err != nil {
+			return err
+		}
+		if _, err := tx.Exec("DELETE FROM finger_templates WHERE uid = ?", uid); err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit()
+}
+
+// GetSyncHistory retrieves recent sync history audit records.
 func (d *DB) GetSyncHistory(limit int) ([]SyncRecord, error) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 
 	if limit <= 0 {
-		limit = 20
+		limit = 50
 	}
 
 	rows, err := d.db.Query(`
@@ -615,7 +672,7 @@ func (d *DB) GetSyncHistory(limit int) ([]SyncRecord, error) {
 		list = append(list, r)
 	}
 
-	return list, nil
+	return list, rows.Err()
 }
 
 // GetDeviceConfig retrieves the saved device configuration from the SQLite database.
