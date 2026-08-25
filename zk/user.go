@@ -11,19 +11,18 @@ import (
 func (c *Client) GetUsers() ([]User, error) {
 	sizes, err := c.ReadSizes()
 	if err != nil {
-		return nil, err
-	}
-
-	if sizes.Users == 0 {
-		c.mu.Lock()
-		c.nextUID = 1
-		c.nextUserID = "1"
-		c.mu.Unlock()
-		return []User{}, nil
+		sizes = &Sizes{}
 	}
 
 	userData, err := c.ReadWithBuffer(CmdUserTempRrq, FctUser, 0)
 	if err != nil {
+		if sizes.Users == 0 {
+			c.mu.Lock()
+			c.nextUID = 1
+			c.nextUserID = "1"
+			c.mu.Unlock()
+			return []User{}, nil
+		}
 		return nil, err
 	}
 
@@ -32,16 +31,29 @@ func (c *Client) GetUsers() ([]User, error) {
 	}
 
 	totalSize := int(binary.LittleEndian.Uint32(userData[:4]))
-	packetSize := totalSize / sizes.Users
+	if totalSize == 0 {
+		return []User{}, nil
+	}
+
+	userData = userData[4:]
+	var packetSize int
+	if sizes.Users > 0 && totalSize%sizes.Users == 0 {
+		packetSize = totalSize / sizes.Users
+	}
 	if packetSize != 28 && packetSize != 72 {
-		packetSize = 72 // default fallback to ZK8
+		if len(userData)%72 == 0 {
+			packetSize = 72
+		} else if len(userData)%28 == 0 {
+			packetSize = 28
+		} else {
+			packetSize = 72 // default fallback to ZK8
+		}
 	}
 
 	c.mu.Lock()
 	c.userPacketSize = packetSize
 	c.mu.Unlock()
 
-	userData = userData[4:]
 	var users []User
 	var maxUID uint16 = 0
 

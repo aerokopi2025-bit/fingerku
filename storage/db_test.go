@@ -82,4 +82,47 @@ func TestSQLiteStorage(t *testing.T) {
 	if stats.TotalUsers != 2 {
 		t.Errorf("Expected 2 total users in stats, got %d", stats.TotalUsers)
 	}
+
+	// Test Default DeviceConfig
+	cfg, err := db.GetDeviceConfig()
+	if err != nil {
+		t.Fatalf("Failed to get device config: %v", err)
+	}
+	if cfg.IP != "192.168.1.201" || cfg.Port != 4370 {
+		t.Errorf("Expected default config 192.168.1.201:4370, got %s:%d", cfg.IP, cfg.Port)
+	}
+
+	// Test Save DeviceConfig
+	newCfg := DeviceConfig{
+		IP:                  "10.0.0.150",
+		Port:                5005,
+		Password:            123456,
+		UDP:                 true,
+		OmitPing:            true,
+		AutoConnect:         false,
+		AutoSyncIntervalSec: 60,
+	}
+	if err := db.SaveDeviceConfig(newCfg); err != nil {
+		t.Fatalf("Failed to save device config: %v", err)
+	}
+
+	loadedCfg, err := db.GetDeviceConfig()
+	if err != nil {
+		t.Fatalf("Failed to get updated device config: %v", err)
+	}
+	if loadedCfg.IP != "10.0.0.150" || loadedCfg.Port != 5005 || loadedCfg.Password != 123456 || !loadedCfg.UDP || !loadedCfg.OmitPing || loadedCfg.AutoConnect || loadedCfg.AutoSyncIntervalSec != 60 {
+		t.Errorf("Updated config mismatch: %+v", loadedCfg)
+	}
+
+	// Test Settings Key-Value
+	if err := db.SetSetting("app_theme", "cyberpunk"); err != nil {
+		t.Fatalf("Failed to set setting: %v", err)
+	}
+	val, err := db.GetSetting("app_theme")
+	if err != nil {
+		t.Fatalf("Failed to get setting: %v", err)
+	}
+	if val != "cyberpunk" {
+		t.Errorf("Expected 'cyberpunk', got '%s'", val)
+	}
 }

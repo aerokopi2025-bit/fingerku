@@ -22,17 +22,18 @@ func main() {
 	command := os.Args[1]
 
 	flagSet := flag.NewFlagSet(command, flag.ExitOnError)
-	ip := flagSet.String("ip", "192.168.1.201", "IP address of the ZKTeco device")
-	port := flagSet.Int("port", 4370, "Port number")
-	password := flagSet.Int("password", 0, "Communication password (commkey)")
+	dbPath := flagSet.String("db", "fingerku.db", "SQLite database file path")
+	ip := flagSet.String("ip", "", "IP address of the ZKTeco device (default: from DB config)")
+	port := flagSet.Int("port", 0, "Port number (default: from DB config)")
+	password := flagSet.Int("password", -1, "Communication password / commkey (default: from DB config)")
 	udp := flagSet.Bool("udp", false, "Force UDP protocol")
 	omitPing := flagSet.Bool("omit-ping", false, "Omit ICMP ping check")
 	verbose := flagSet.Bool("verbose", false, "Enable verbose logging")
+	autoSyncInterval := flagSet.Int("auto-sync-interval", 0, "Auto-sync interval in seconds for run command")
 
 	// Subcommand specific flags
 	unlockSec := flagSet.Int("seconds", 3, "Unlock duration in seconds (unlock command)")
 	voiceIdx := flagSet.Int("index", 0, "Voice index to test (voice command)")
-	dbPath := flagSet.String("db", "fingerku.db", "SQLite database file path")
 	userFilter := flagSet.String("user", "", "Filter by User ID (db-logs command)")
 	fromFilter := flagSet.String("from", "", "Start date filter YYYY-MM-DD (db-logs command)")
 	toFilter := flagSet.String("to", "", "End date filter YYYY-MM-DD (db-logs command)")
@@ -41,41 +42,90 @@ func main() {
 
 	_ = flagSet.Parse(os.Args[2:])
 
-	client := zk.New(*ip,
-		zk.WithPort(*port),
-		zk.WithPassword(*password),
-		zk.WithForceUDP(*udp),
-		zk.WithOmitPing(*omitPing),
-		zk.WithVerbose(*verbose),
-		zk.WithTimeout(10*time.Second),
-	)
+	// Check which flags were explicitly set via CLI
+	isFlagSet := make(map[string]bool)
+	flagSet.Visit(func(f *flag.Flag) {
+		isFlagSet[f.Name] = true
+	})
+
+	// 1. Open SQLite Database (defaults to fingerku.db)
+	db, err := storage.Open(*dbPath)
+	if err != nil {
+		fmt.Printf("Error opening SQLite database '%s': %v\n", *dbPath, err)
+		os.Exit(1)
+	}
+	defer db.Close()
+
+	// 2. Load stored device configuration from DB
+	dbCfg, err := db.GetDeviceConfig()
+	if err != nil {
+		dbCfg = storage.DefaultDeviceConfig()
+	}
+
+	// 3. Merge: CLI flags explicitly passed override the stored DB configuration
+	effectiveCfg := dbCfg
+	if isFlagSet["ip"] {
+		effectiveCfg.IP = *ip
+	}
+	if isFlagSet["port"] {
+		effectiveCfg.Port = *port
+	}
+	if isFlagSet["password"] {
+		effectiveCfg.Password = *password
+	}
+	if isFlagSet["udp"] {
+		effectiveCfg.UDP = *udp
+	}
+	if isFlagSet["omit-ping"] {
+		effectiveCfg.OmitPing = *omitPing
+	}
+	if isFlagSet["auto-sync-interval"] {
+		effectiveCfg.AutoSyncIntervalSec = *autoSyncInterval
+	}
 
 	switch command {
+	case "run", "daemon", "service":
+		runRunner(db, effectiveCfg, *dbPath, *verbose)
+	case "config", "get-config":
+		runGetConfig(db, *dbPath)
+	case "set-config":
+		runSetConfig(db, effectiveCfg, *dbPath)
 	case "info":
-		runInfo(client)
+		client := createClient(effectiveCfg, *verbose)
+		runInfo(client, effectiveCfg)
 	case "users":
-		runUsers(client)
+		client := createClient(effectiveCfg, *verbose)
+		runUsers(client, db)
 	case "attendance":
+		client := createClient(effectiveCfg, *verbose)
 		runAttendance(client)
 	case "templates":
+		client := createClient(effectiveCfg, *verbose)
 		runTemplates(client)
 	case "live":
-		runLive(client, *dbPath, *ip)
+		client := createClient(effectiveCfg, *verbose)
+		runLive(client, db, effectiveCfg)
 	case "sync-logs", "pull-logs":
-		runSyncLogs(client, *dbPath, *ip)
+		client := createClient(effectiveCfg, *verbose)
+		runSyncLogs(client, db, effectiveCfg, *dbPath)
 	case "db-logs":
-		runDBLogs(*dbPath, *userFilter, *fromFilter, *toFilter, *statusFilter, *limitFilter)
+		runDBLogs(db, *dbPath, *userFilter, *fromFilter, *toFilter, *statusFilter, *limitFilter)
 	case "db-stats":
-		runDBStats(*dbPath)
+		runDBStats(db, *dbPath)
 	case "unlock":
+		client := createClient(effectiveCfg, *verbose)
 		runUnlock(client, *unlockSec)
 	case "synctime":
+		client := createClient(effectiveCfg, *verbose)
 		runSyncTime(client)
 	case "voice":
+		client := createClient(effectiveCfg, *verbose)
 		runVoice(client, *voiceIdx)
 	case "restart":
+		client := createClient(effectiveCfg, *verbose)
 		runRestart(client)
 	case "poweroff":
+		client := createClient(effectiveCfg, *verbose)
 		runPoweroff(client)
 	case "help", "--help", "-h":
 		printUsage()
@@ -87,31 +137,47 @@ func main() {
 }
 
 func printUsage() {
-	fmt.Println("Fingerku CLI - ZKTeco Device Management Tool")
+	fmt.Println("Fingerku CLI - ZKTeco Device Management & SQLite Sync Tool")
 	fmt.Println("\nUsage:")
 	fmt.Println("  fingerku-cli <command> [flags]")
-	fmt.Println("\nAvailable Commands:")
-	fmt.Println("  sync-logs   Fetch attendance logs from machine & save to SQLite database (--db fingerku.db)")
+	fmt.Println("\nCore & Database Commands:")
+	fmt.Println("  run         Run background listener & auto-sync service using DB configuration")
+	fmt.Println("  config      Display device configuration saved in SQLite database")
+	fmt.Println("  set-config  Update and save default device configuration in SQLite database")
+	fmt.Println("  sync-logs   Fetch attendance logs from machine & save to SQLite database")
 	fmt.Println("  db-logs     Query and display attendance logs stored in SQLite database")
 	fmt.Println("  db-stats    Display statistical summary from SQLite database")
+	fmt.Println("\nDevice & Hardware Commands:")
 	fmt.Println("  info        Show device hardware, firmware, network and memory capacity")
-	fmt.Println("  users       List all enrolled users")
+	fmt.Println("  users       List all enrolled users (and cache to SQLite)")
 	fmt.Println("  attendance  Fetch attendance records directly from machine RAM (Read-Only)")
 	fmt.Println("  templates   List fingerprint biometric templates")
-	fmt.Println("  live        Monitor punch events in real-time (and optionally save to SQLite)")
+	fmt.Println("  live        Monitor punch events in real-time and save to SQLite")
 	fmt.Println("  unlock      Trigger door access relay (--seconds 3)")
 	fmt.Println("  synctime    Synchronize machine time with server RTC")
 	fmt.Println("  voice       Play speaker voice prompt (--index 0)")
 	fmt.Println("  restart     Reboot device")
 	fmt.Println("  poweroff    Shutdown device")
 	fmt.Println("\nGlobal Flags:")
-	fmt.Println("  --ip        Device IP address (default: 192.168.1.201)")
-	fmt.Println("  --port      Device port (default: 4370)")
-	fmt.Println("  --password  Commkey password (default: 0)")
-	fmt.Println("  --udp       Force UDP transport")
-	fmt.Println("  --omit-ping Skip ICMP ping before connecting")
-	fmt.Println("  --verbose   Show packet debugging information")
-	fmt.Println("  --db        SQLite database file path (default: fingerku.db)")
+	fmt.Println("  --db                 SQLite database file path (default: fingerku.db)")
+	fmt.Println("  --ip                 Device IP address (overrides DB config)")
+	fmt.Println("  --port               Device port (overrides DB config, default: 4370)")
+	fmt.Println("  --password           Commkey password (overrides DB config, default: 0)")
+	fmt.Println("  --udp                Force UDP transport (overrides DB config)")
+	fmt.Println("  --omit-ping          Skip ICMP ping before connecting")
+	fmt.Println("  --auto-sync-interval Periodic sync interval in seconds for run command (0 = disabled)")
+	fmt.Println("  --verbose            Show packet debugging information")
+}
+
+func createClient(cfg storage.DeviceConfig, verbose bool) *zk.Client {
+	return zk.New(cfg.IP,
+		zk.WithPort(cfg.Port),
+		zk.WithPassword(cfg.Password),
+		zk.WithForceUDP(cfg.UDP),
+		zk.WithOmitPing(cfg.OmitPing),
+		zk.WithVerbose(verbose),
+		zk.WithTimeout(10*time.Second),
+	)
 }
 
 func connect(client *zk.Client) {
@@ -123,34 +189,107 @@ func connect(client *zk.Client) {
 	fmt.Println("OK")
 }
 
-func runSyncLogs(client *zk.Client, dbPath string, deviceIP string) {
-	db, err := storage.Open(dbPath)
-	if err != nil {
-		fmt.Printf("Error opening SQLite database '%s': %v\n", dbPath, err)
-		return
+// runRunner executes the continuous service daemon using configuration saved in SQLite DB.
+func runRunner(db *storage.DB, cfg storage.DeviceConfig, dbPath string, verbose bool) {
+	fmt.Println("================================================================")
+	fmt.Println("       🌟 Fingerku Runner - ZKTeco Background Service 🌟        ")
+	fmt.Println("================================================================")
+	fmt.Printf(" SQLite Database : %s\n", dbPath)
+	fmt.Printf(" Device Target   : %s:%d (CommKey: %d, UDP: %v)\n", cfg.IP, cfg.Port, cfg.Password, cfg.UDP)
+	if cfg.AutoSyncIntervalSec > 0 {
+		fmt.Printf(" Auto-Sync Period: Every %d seconds\n", cfg.AutoSyncIntervalSec)
+	} else {
+		fmt.Printf(" Auto-Sync Period: On Start & Live Stream\n")
 	}
-	defer db.Close()
+	fmt.Println("================================================================")
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+
+	go func() {
+		<-sigChan
+		fmt.Println("\n[Runner] Shutdown signal received. Stopping gracefully...")
+		cancel()
+	}()
+
+	// 1. Initial Device Connection
+	client := createClient(cfg, verbose)
 	connect(client)
 	defer client.Disconnect()
+
+	// 2. Initial Sync
+	fmt.Println("[Runner] Performing initial synchronization...")
+	userMap := syncUsersAndLogs(client, db, cfg.IP, dbPath)
+
+	// 3. Optional Periodic Auto-Sync Timer
+	if cfg.AutoSyncIntervalSec > 0 {
+		go func() {
+			ticker := time.NewTicker(time.Duration(cfg.AutoSyncIntervalSec) * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					fmt.Println("\n[Auto-Sync] Running periodic synchronization...")
+					_ = syncUsersAndLogs(client, db, cfg.IP, dbPath)
+				}
+			}
+		}()
+	}
+
+	// 4. Live Capture Loop
+	fmt.Println("\n[Runner] [LIVE CAPTURE ACTIVE] Monitoring punches in real-time... (Press Ctrl+C to stop)")
+	events, errs := client.LiveCapture(ctx)
+
+	for {
+		select {
+		case <-ctx.Done():
+			fmt.Println("[Runner] Service stopped.")
+			return
+		case err, ok := <-errs:
+			if ok && err != nil {
+				fmt.Printf("[Runner] Live capture error: %v\n", err)
+			}
+			return
+		case ev, ok := <-events:
+			if !ok {
+				return
+			}
+			userName := userMap[ev.UserID]
+			if userName == "" {
+				userName = fmt.Sprintf("User %s", ev.UserID)
+			}
+
+			_, _ = db.SaveSinglePunch(ev, userName, cfg.IP, "live_stream")
+			fmt.Printf("👉 [%s] Punch Event! User: %s (ID: %s, UID: %d) -> %s (Punch: %d) [Saved to SQLite]\n",
+				ev.Timestamp.Format("15:04:05"), userName, ev.UserID, ev.UID, ev.StatusName(), ev.Punch)
+		}
+	}
+}
+
+func syncUsersAndLogs(client *zk.Client, db *storage.DB, deviceIP string, dbPath string) map[string]string {
+	userMap := make(map[string]string)
 
 	_ = client.DisableDevice()
 	defer client.EnableDevice()
 
-	fmt.Print("Reading users for name mapping... ")
+	fmt.Print(" -> Fetching users from machine... ")
 	users, err := client.GetUsers()
-	userMap := make(map[string]string)
 	if err == nil {
 		_ = db.SaveUsersBatch(users)
 		for _, u := range users {
 			userMap[u.UserID] = u.Name
 		}
-		fmt.Printf("OK (%d users enrolled)\n", len(users))
+		fmt.Printf("OK (%d users saved to DB)\n", len(users))
 	} else {
 		fmt.Printf("Warning: %v\n", err)
 	}
 
-	fmt.Print("Fetching attendance logs from device memory... ")
+	fmt.Print(" -> Fetching attendance records from machine RAM... ")
 	records, err := client.GetAttendance()
 	if err != nil {
 		fmt.Printf("FAILED: %v\n", err)
@@ -161,14 +300,13 @@ func runSyncLogs(client *zk.Client, dbPath string, deviceIP string) {
 			Status:       "failed",
 			ErrorMessage: err.Error(),
 		})
-		return
+		return userMap
 	}
 	fmt.Printf("OK (%d records found)\n", len(records))
 
-	fmt.Printf("Saving to SQLite database '%s'... ", dbPath)
-	inserted, err := db.SaveAttendanceBatch(records, userMap, deviceIP, "device_sync")
+	inserted, err := db.SaveAttendanceBatch(records, userMap, deviceIP, "runner_sync")
 	if err != nil {
-		fmt.Printf("FAILED: %v\n", err)
+		fmt.Printf(" -> Database write error: %v\n", err)
 		_ = db.LogSync(storage.SyncRecord{
 			DeviceIP:     deviceIP,
 			TotalRecords: len(records),
@@ -176,16 +314,11 @@ func runSyncLogs(client *zk.Client, dbPath string, deviceIP string) {
 			Status:       "failed",
 			ErrorMessage: err.Error(),
 		})
-		return
+		return userMap
 	}
 
-	skipped := len(records) - inserted
-	fmt.Printf("SUCCESS!\n\n")
-	fmt.Println("=== Synchronization Summary ===")
-	fmt.Printf("Total records on device : %d\n", len(records))
-	fmt.Printf("New records inserted    : %d\n", inserted)
-	fmt.Printf("Duplicates skipped      : %d\n", skipped)
-	fmt.Printf("Database file           : %s\n", dbPath)
+	fmt.Printf(" -> Sync finished: %d total on device, %d new inserted, %d skipped duplicates.\n",
+		len(records), inserted, len(records)-inserted)
 
 	_ = db.LogSync(storage.SyncRecord{
 		DeviceIP:     deviceIP,
@@ -193,16 +326,53 @@ func runSyncLogs(client *zk.Client, dbPath string, deviceIP string) {
 		NewRecords:   inserted,
 		Status:       "success",
 	})
+
+	return userMap
 }
 
-func runDBLogs(dbPath string, userFilter, fromFilter, toFilter string, statusFilter, limit int) {
-	db, err := storage.Open(dbPath)
+func runGetConfig(db *storage.DB, dbPath string) {
+	cfg, err := db.GetDeviceConfig()
 	if err != nil {
-		fmt.Printf("Error opening SQLite database '%s': %v\n", dbPath, err)
+		fmt.Printf("Error retrieving device config from DB: %v\n", err)
 		return
 	}
-	defer db.Close()
 
+	proto := "TCP"
+	if cfg.UDP {
+		proto = "UDP"
+	}
+
+	fmt.Printf("\n=== Stored Device Configuration (%s) ===\n", dbPath)
+	fmt.Printf("IP Address            : %s\n", cfg.IP)
+	fmt.Printf("Port                  : %d\n", cfg.Port)
+	fmt.Printf("CommKey Password      : %d\n", cfg.Password)
+	fmt.Printf("Transport Protocol    : %s\n", proto)
+	fmt.Printf("Omit Ping Check       : %v\n", cfg.OmitPing)
+	fmt.Printf("Auto-Connect On Start : %v\n", cfg.AutoConnect)
+	fmt.Printf("Auto-Sync Interval    : %d seconds\n", cfg.AutoSyncIntervalSec)
+	if !cfg.UpdatedAt.IsZero() {
+		fmt.Printf("Last Updated In DB    : %s\n", cfg.UpdatedAt.Format("2006-01-02 15:04:05"))
+	}
+	fmt.Println("----------------------------------------------------------------")
+}
+
+func runSetConfig(db *storage.DB, cfg storage.DeviceConfig, dbPath string) {
+	if err := db.SaveDeviceConfig(cfg); err != nil {
+		fmt.Printf("Failed to save device configuration to SQLite '%s': %v\n", dbPath, err)
+		return
+	}
+	fmt.Printf("Device configuration successfully saved to SQLite database '%s'!\n", dbPath)
+	runGetConfig(db, dbPath)
+}
+
+func runSyncLogs(client *zk.Client, db *storage.DB, cfg storage.DeviceConfig, dbPath string) {
+	connect(client)
+	defer client.Disconnect()
+
+	_ = syncUsersAndLogs(client, db, cfg.IP, dbPath)
+}
+
+func runDBLogs(db *storage.DB, dbPath string, userFilter, fromFilter, toFilter string, statusFilter, limit int) {
 	var statusPtr *int
 	if statusFilter >= 0 {
 		statusPtr = &statusFilter
@@ -232,14 +402,7 @@ func runDBLogs(dbPath string, userFilter, fromFilter, toFilter string, statusFil
 	}
 }
 
-func runDBStats(dbPath string) {
-	db, err := storage.Open(dbPath)
-	if err != nil {
-		fmt.Printf("Error opening SQLite database '%s': %v\n", dbPath, err)
-		return
-	}
-	defer db.Close()
-
+func runDBStats(db *storage.DB, dbPath string) {
 	stats, err := db.GetAttendanceStats()
 	if err != nil {
 		fmt.Printf("Error querying SQLite stats: %v\n", err)
@@ -247,9 +410,9 @@ func runDBStats(dbPath string) {
 	}
 
 	fmt.Printf("\n=== SQLite Attendance Statistics (%s) ===\n", dbPath)
-	fmt.Printf("Total Attendance Logs    : %d\n", stats.TotalRecords)
-	fmt.Printf("Total Unique Enrolled    : %d\n", stats.TotalUsers)
-	fmt.Printf("Punches Recorded Today   : %d\n", stats.TodayRecords)
+	fmt.Printf("Total Attendance Logs     : %d\n", stats.TotalRecords)
+	fmt.Printf("Total Unique Enrolled     : %d\n", stats.TotalUsers)
+	fmt.Printf("Punches Recorded Today    : %d\n", stats.TodayRecords)
 	fmt.Printf("Unique Users Present Today: %d\n", stats.TodayUniqueUsers)
 
 	fmt.Println("\n--- Breakdown by Status ---")
@@ -258,7 +421,7 @@ func runDBStats(dbPath string) {
 	}
 }
 
-func runInfo(client *zk.Client) {
+func runInfo(client *zk.Client, cfg storage.DeviceConfig) {
 	connect(client)
 	defer client.Disconnect()
 
@@ -291,7 +454,7 @@ func runInfo(client *zk.Client) {
 	fmt.Printf("Cards            : %d\n", info.Sizes.Cards)
 }
 
-func runUsers(client *zk.Client) {
+func runUsers(client *zk.Client, db *storage.DB) {
 	connect(client)
 	defer client.Disconnect()
 
@@ -304,7 +467,9 @@ func runUsers(client *zk.Client) {
 		return
 	}
 
-	fmt.Printf("\nTotal Enrolled Users: %d\n", len(users))
+	_ = db.SaveUsersBatch(users)
+
+	fmt.Printf("\nTotal Enrolled Users: %d (Cached to SQLite)\n", len(users))
 	fmt.Printf("%-6s | %-12s | %-20s | %-14s | %-10s | %-10s\n", "UID", "User ID", "Name", "Privilege", "Password", "Card")
 	fmt.Println("-----------------------------------------------------------------------------------------")
 	for _, u := range users {
@@ -361,16 +526,7 @@ func runTemplates(client *zk.Client) {
 	}
 }
 
-func runLive(client *zk.Client, dbPath string, deviceIP string) {
-	var db *storage.DB
-	if dbPath != "" {
-		if d, err := storage.Open(dbPath); err == nil {
-			db = d
-			defer db.Close()
-			fmt.Printf("[SQLite Storage Enabled] Logging incoming punches to '%s'\n", dbPath)
-		}
-	}
-
+func runLive(client *zk.Client, db *storage.DB, cfg storage.DeviceConfig) {
 	connect(client)
 	defer client.Disconnect()
 
@@ -404,7 +560,7 @@ func runLive(client *zk.Client, dbPath string, deviceIP string) {
 				ev.Timestamp.Format("15:04:05"), ev.UserID, ev.UID, ev.StatusName(), ev.Punch)
 
 			if db != nil {
-				_, _ = db.SaveSinglePunch(ev, "", deviceIP, "live_stream")
+				_, _ = db.SaveSinglePunch(ev, "", cfg.IP, "live_stream")
 			}
 		}
 	}

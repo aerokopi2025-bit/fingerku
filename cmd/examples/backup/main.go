@@ -10,8 +10,8 @@ import (
 )
 
 type BackupPayload struct {
-	Users      []zk.User   `json:"users"`
-	Templates  []zk.Finger `json:"templates"`
+	Users      []zk.User       `json:"users"`
+	Templates  []zk.Finger     `json:"templates"`
 	Attendance []zk.Attendance `json:"attendance"`
 	DeviceInfo *zk.DeviceInfo  `json:"device_info"`
 }

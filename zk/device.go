@@ -39,7 +39,7 @@ func (c *Client) GetFirmwareVersion() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if respCode != CmdAckOk {
+	if respCode != CmdAckOk && respCode != CmdData {
 		return "", NewResponseError("cannot read firmware version", respCode)
 	}
 	return CleanCString(data), nil
@@ -52,7 +52,7 @@ func (c *Client) getOptionValue(key string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if respCode != CmdAckOk {
+	if respCode != CmdAckOk && respCode != CmdData {
 		return "", NewResponseError(fmt.Sprintf("cannot read option '%s'", key), respCode)
 	}
 
@@ -172,7 +172,7 @@ func (c *Client) GetPinWidth() (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	if respCode != CmdAckOk || len(data) == 0 {
+	if (respCode != CmdAckOk && respCode != CmdData) || len(data) == 0 {
 		return 0, NewResponseError("cannot get pin width", respCode)
 	}
 	return int(data[0]), nil
@@ -184,7 +184,7 @@ func (c *Client) ReadSizes() (*Sizes, error) {
 	if err != nil {
 		return nil, err
 	}
-	if respCode != CmdAckOk {
+	if respCode != CmdAckOk && respCode != CmdData {
 		return nil, NewResponseError("cannot read memory sizes", respCode)
 	}
 
@@ -227,7 +227,7 @@ func (c *Client) GetTime() (time.Time, error) {
 	if err != nil {
 		return time.Time{}, err
 	}
-	if respCode != CmdAckOk || len(data) < 4 {
+	if (respCode != CmdAckOk && respCode != CmdData) || len(data) < 4 {
 		return time.Time{}, NewResponseError("cannot get machine time", respCode)
 	}
 	return DecodeTimeBytes(data[:4]), nil

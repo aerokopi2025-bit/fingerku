@@ -10,11 +10,7 @@ import (
 func (c *Client) GetAttendance() ([]Attendance, error) {
 	sizes, err := c.ReadSizes()
 	if err != nil {
-		return nil, err
-	}
-
-	if sizes.Records == 0 {
-		return []Attendance{}, nil
+		sizes = &Sizes{}
 	}
 
 	// Fetch users map for UID/UserID cross-referencing
@@ -28,6 +24,9 @@ func (c *Client) GetAttendance() ([]Attendance, error) {
 
 	attData, err := c.ReadWithBuffer(CmdAttLogRrq, 0, 0)
 	if err != nil {
+		if sizes.Records == 0 {
+			return []Attendance{}, nil
+		}
 		return nil, err
 	}
 
@@ -36,12 +35,26 @@ func (c *Client) GetAttendance() ([]Attendance, error) {
 	}
 
 	totalSize := int(binary.LittleEndian.Uint32(attData[:4]))
-	if totalSize == 0 || sizes.Records == 0 {
+	if totalSize == 0 {
 		return []Attendance{}, nil
 	}
 
-	recordSize := totalSize / sizes.Records
 	attData = attData[4:]
+	var recordSize int
+	if sizes.Records > 0 && totalSize%sizes.Records == 0 {
+		recordSize = totalSize / sizes.Records
+	}
+	if recordSize != 8 && recordSize != 16 && recordSize != 40 {
+		if len(attData)%40 == 0 {
+			recordSize = 40
+		} else if len(attData)%8 == 0 {
+			recordSize = 8
+		} else if len(attData)%16 == 0 {
+			recordSize = 16
+		} else {
+			recordSize = 40 // default fallback
+		}
+	}
 
 	var records []Attendance
 

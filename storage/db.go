@@ -84,6 +84,24 @@ func (d *DB) initSchema() error {
 			status TEXT NOT NULL,
 			error_message TEXT
 		);`,
+		`CREATE TABLE IF NOT EXISTS device_config (
+			id INTEGER PRIMARY KEY CHECK (id = 1),
+			ip TEXT NOT NULL DEFAULT '192.168.1.201',
+			port INTEGER NOT NULL DEFAULT 4370,
+			password INTEGER NOT NULL DEFAULT 0,
+			udp BOOLEAN NOT NULL DEFAULT 0,
+			omit_ping BOOLEAN NOT NULL DEFAULT 0,
+			auto_connect BOOLEAN NOT NULL DEFAULT 1,
+			auto_sync_interval_sec INTEGER NOT NULL DEFAULT 0,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		);`,
+		`INSERT OR IGNORE INTO device_config (id, ip, port, password, udp, omit_ping, auto_connect, auto_sync_interval_sec)
+		VALUES (1, '192.168.1.201', 4370, 0, 0, 0, 1, 0);`,
+		`CREATE TABLE IF NOT EXISTS settings (
+			key TEXT PRIMARY KEY,
+			value TEXT NOT NULL,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		);`,
 	}
 
 	for _, query := range queries {
@@ -221,6 +239,40 @@ func (d *DB) SaveUsersBatch(users []zk.User) error {
 	}
 
 	return tx.Commit()
+}
+
+// GetUsers retrieves all cached user profiles stored in the SQLite database.
+func (d *DB) GetUsers() ([]zk.User, error) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+
+	rows, err := d.db.Query(`
+		SELECT uid, user_id, name, privilege, password, group_id, card
+		FROM users
+		ORDER BY uid ASC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var users []zk.User
+	for rows.Next() {
+		var u zk.User
+		var pwd, gid sql.NullString
+		if err := rows.Scan(&u.UID, &u.UserID, &u.Name, &u.Privilege, &pwd, &gid, &u.Card); err != nil {
+			return nil, err
+		}
+		if pwd.Valid {
+			u.Password = pwd.String
+		}
+		if gid.Valid {
+			u.GroupID = gid.String
+		}
+		users = append(users, u)
+	}
+
+	return users, rows.Err()
 }
 
 // GetAttendance retrieves stored attendance logs based on filter criteria with pagination.
@@ -419,4 +471,106 @@ func (d *DB) GetSyncHistory(limit int) ([]SyncRecord, error) {
 	}
 
 	return list, nil
+}
+
+// GetDeviceConfig retrieves the saved device configuration from the SQLite database.
+// If no configuration is stored, it initializes and returns the default configuration.
+func (d *DB) GetDeviceConfig() (DeviceConfig, error) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+
+	var cfg DeviceConfig
+	var udp, omitPing, autoConnect int
+	var updatedStr string
+
+	err := d.db.QueryRow(`
+		SELECT ip, port, password, udp, omit_ping, auto_connect, auto_sync_interval_sec, updated_at
+		FROM device_config
+		WHERE id = 1
+	`).Scan(&cfg.IP, &cfg.Port, &cfg.Password, &udp, &omitPing, &autoConnect, &cfg.AutoSyncIntervalSec, &updatedStr)
+
+	if err == sql.ErrNoRows {
+		return DefaultDeviceConfig(), nil
+	} else if err != nil {
+		return DefaultDeviceConfig(), err
+	}
+
+	cfg.UDP = udp != 0
+	cfg.OmitPing = omitPing != 0
+	cfg.AutoConnect = autoConnect != 0
+
+	if t, err := time.Parse("2006-01-02 15:04:05", updatedStr); err == nil {
+		cfg.UpdatedAt = t
+	} else if t, err := time.Parse(time.RFC3339, updatedStr); err == nil {
+		cfg.UpdatedAt = t
+	}
+
+	return cfg, nil
+}
+
+// SaveDeviceConfig updates or inserts the device configuration into the database.
+func (d *DB) SaveDeviceConfig(cfg DeviceConfig) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	if cfg.IP == "" {
+		cfg.IP = "192.168.1.201"
+	}
+	if cfg.Port <= 0 {
+		cfg.Port = 4370
+	}
+
+	udpInt := 0
+	if cfg.UDP {
+		udpInt = 1
+	}
+	omitPingInt := 0
+	if cfg.OmitPing {
+		omitPingInt = 1
+	}
+	autoConnectInt := 0
+	if cfg.AutoConnect {
+		autoConnectInt = 1
+	}
+
+	_, err := d.db.Exec(`
+		INSERT INTO device_config (id, ip, port, password, udp, omit_ping, auto_connect, auto_sync_interval_sec, updated_at)
+		VALUES (1, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+		ON CONFLICT(id) DO UPDATE SET
+			ip = excluded.ip,
+			port = excluded.port,
+			password = excluded.password,
+			udp = excluded.udp,
+			omit_ping = excluded.omit_ping,
+			auto_connect = excluded.auto_connect,
+			auto_sync_interval_sec = excluded.auto_sync_interval_sec,
+			updated_at = CURRENT_TIMESTAMP
+	`, cfg.IP, cfg.Port, cfg.Password, udpInt, omitPingInt, autoConnectInt, cfg.AutoSyncIntervalSec)
+
+	return err
+}
+
+// GetSetting retrieves a setting value by key from the database.
+func (d *DB) GetSetting(key string) (string, error) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+
+	var val string
+	err := d.db.QueryRow("SELECT value FROM settings WHERE key = ?", key).Scan(&val)
+	return val, err
+}
+
+// SetSetting stores or updates a key-value setting in the database.
+func (d *DB) SetSetting(key, value string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	_, err := d.db.Exec(`
+		INSERT INTO settings (key, value, updated_at)
+		VALUES (?, ?, CURRENT_TIMESTAMP)
+		ON CONFLICT(key) DO UPDATE SET
+			value = excluded.value,
+			updated_at = CURRENT_TIMESTAMP
+	`, key, value)
+	return err
 }

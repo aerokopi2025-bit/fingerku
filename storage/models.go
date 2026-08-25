@@ -49,3 +49,29 @@ type SyncRecord struct {
 	Status       string    `json:"status"` // "success", "partial", "failed"
 	ErrorMessage string    `json:"error_message,omitempty"`
 }
+
+// DeviceConfig represents the ZKTeco device connection parameters and runtime options stored in SQLite.
+type DeviceConfig struct {
+	IP                  string    `json:"ip"`
+	Port                int       `json:"port"`
+	Password            int       `json:"password"`
+	UDP                 bool      `json:"udp"`
+	OmitPing            bool      `json:"omit_ping"`
+	AutoConnect         bool      `json:"auto_connect"`
+	AutoSyncIntervalSec int       `json:"auto_sync_interval_sec"`
+	UpdatedAt           time.Time `json:"updated_at,omitempty"`
+}
+
+// DefaultDeviceConfig returns the default configuration settings.
+func DefaultDeviceConfig() DeviceConfig {
+	return DeviceConfig{
+		IP:                  "192.168.1.201",
+		Port:                4370,
+		Password:            0,
+		UDP:                 false,
+		OmitPing:            false,
+		AutoConnect:         true,
+		AutoSyncIntervalSec: 0,
+		UpdatedAt:           time.Now(),
+	}
+}

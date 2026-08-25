@@ -16,15 +16,14 @@ type UserTemplatesPair struct {
 func (c *Client) GetTemplates() ([]Finger, error) {
 	sizes, err := c.ReadSizes()
 	if err != nil {
-		return nil, err
-	}
-
-	if sizes.Fingers == 0 {
-		return []Finger{}, nil
+		sizes = &Sizes{}
 	}
 
 	templateData, err := c.ReadWithBuffer(CmdDbRrq, FctFingerTmp, 0)
 	if err != nil {
+		if sizes.Fingers == 0 {
+			return []Finger{}, nil
+		}
 		return nil, err
 	}
 

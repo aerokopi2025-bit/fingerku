@@ -2,21 +2,21 @@
 
 `fingerku` adalah library dan CLI tool mandiri (*pure Go*) untuk berkomunikasi langsung dengan mesin absensi dan access control biometrik **ZKTeco / ZKSoftware** melalui protokol socket jaringan (TCP & UDP, default port `4370`), tanpa memerlukan SDK resmi Windows DLL/COM.
 
-Proyek ini merupakan porting modern dari [pyzk](https://github.com/fananimi/pyzk) ke bahasa **Go (Golang)** dengan penambahan fitur konkurensi native (*Go channels, context cancellation, thread-safe client*).
+Dilengkapi dengan penyimpanan lokal **SQLite (`fingerku.db`)**, fitur **Live Capture Streaming**, dan background service **Runner Daemon**.
 
 ---
 
 ## Fitur Utama
 
-- 🚀 **Pure Go & Zero Heavy Dependencies**: Hanya menggunakan standard library Go (`net`, `encoding/binary`, `time`, `context`, `sync`).
+- 🚀 **Pure Go & Zero Heavy Dependencies**: Hanya menggunakan standard library Go dan SQLite embedded driver (`modernc.org/sqlite`).
 - 🔄 **TCP & UDP Transport**: Mendukung protokol TCP (dengan framing header `0x5050`) dan UDP.
+- 🗄️ **SQLite DB-First Integration**: Otomatis membaca & menyimpan konfigurasi perangkat, data user, audit history, dan riwayat presensi ke SQLite lokal.
 - ⚡ **Realtime Event Streaming (Live Capture)**: Menggunakan Go Channel (`<-chan zk.Attendance`) dan `context.Context` untuk mendengarkan event absensi secara seketika saat pegawai menempelkan jari/kartu/wajah.
 - 👥 **Manajemen User Lengkap**: Ambil daftar pengguna, tambah/update pengguna baru, hapus pengguna, dan reset hak akses admin.
-- 📊 **Log Presensi (Attendance Logs)**: Baca seluruh rekaman log absensi (Read-Only).
-- 🧬 **Template Sidik Jari (Biometrics)**: Ekstraksi template sidik jari (`GetTemplates`), upload template per-user maupun high-rate batch (`SaveUserTemplate`), dan hapus template.
+- 📊 **Log Presensi (Attendance Logs)**: Baca seluruh rekaman log absensi dari RAM mesin maupun query dari SQLite lokal.
+- 🧬 **Template Sidik Jari (Biometrics)**: Ekstraksi template sidik jari (`GetTemplates`), upload template per-user (`SaveUserTemplate`), dan hapus template.
 - 🛠️ **Kontrol Perangkat & Hardware**: Sinkronisasi waktu RTC, trigger relay kunci pintu (*door access control*), kontrol layar LCD, tes suara speaker, restart, dan shutdown.
-- 💻 **Interactive CLI Utility**: Dilengkapi CLI `fingerku-cli` untuk kebutuhan diagnostik, backup, dan automasi terminal.
-- 🌐 **Modern Web UI (Tailwind CSS v4)**: Antarmuka web modern (*Single-Page Application*) dengan Tailwind CSS v4, live monitoring kiosk presensi, manajemen user, ekspor log CSV/JSON, simulator demo mode, kontrol relay pintu, dan suara speaker.
+- 💻 **Interactive CLI & Background Service**: Dilengkapi CLI `fingerku-cli` untuk kebutuhan automasi, sync service, dan query database.
 
 ---
 
@@ -25,8 +25,13 @@ Proyek ini merupakan porting modern dari [pyzk](https://github.com/fananimi/pyzk
 ```
 fingerku/
 ├── go.mod
+├── Makefile                    # Target build, run, test, clean
 ├── README.md
-├── zk/                         # Core Package
+├── storage/                    # SQLite Storage Layer
+│   ├── models.go               # Struct database, DeviceConfig, AttendanceRecord
+│   ├── db.go                   # SQLite schema, CRUD operations, WAL mode
+│   └── db_test.go              # Storage unit tests
+├── zk/                         # Core ZKTeco Protocol Package
 │   ├── const.go                # Konstanta opcode, ACK, event flags
 │   ├── errors.go               # Custom typed errors
 │   ├── models.go               # Struct User, Attendance, Finger, Sizes, DeviceInfo
@@ -39,16 +44,8 @@ fingerku/
 │   ├── buffer.go               # Chunking & transfer buffer besar
 │   ├── live.go                 # Live capture streaming via Go channel
 │   └── zk_test.go              # Unit tests
-├── web/                        # Web UI Frontend (Tailwind CSS v4)
-│   ├── package.json            # Tailwind v4 scripts
-│   ├── src/                    # Tailwind source (input.css)
-│   └── static/                 # Embedded assets (index.html, style.css, app.js)
 └── cmd/
-    ├── fingerku-web/           # Standalone Web Server & UI Console
-    │   ├── main.go
-    │   ├── manager.go
-    │   └── static/             # Embedded HTML/CSS/JS
-    ├── fingerku-cli/           # CLI Application
+    ├── fingerku-cli/           # CLI Application & Background Runner
     │   └── main.go
     └── examples/               # Contoh kode fungsional
         ├── basic/              # Koneksi & info dasar
@@ -62,73 +59,82 @@ fingerku/
 
 ## Instalasi & Build
 
-### 1. Build Web UI Console (`fingerku-web`)
+### 1. Build Binary dengan Make
 ```bash
-cd /home/rhee/Projects/go/fingerku
-go build -o fingerku-web ./cmd/fingerku-web
+# Build binary CLI ke bin/fingerku-cli
+make build
 
-# Jalankan server Web UI (Default port: 8080)
-./fingerku-web --ip 192.168.1.201
+# Menjalankan seluruh unit tests
+make test
 
-# Jalankan dalam Mode Demo / Mock Simulator (Uji coba tanpa mesin fisik)
-./fingerku-web --mock --port 8080
-```
-Buka browser di **`http://localhost:8080`**.
-
-### 2. Build CLI Tool (`fingerku-cli`)
-```bash
-go build -o fingerku-cli ./cmd/fingerku-cli
-```
-
-### 3. Menjalankan Unit Tests
-```bash
-go test -v ./...
+# Menjalankan background service runner
+make dev
 ```
 
 ---
 
 ## Penggunaan CLI (`fingerku-cli`)
 
-### 1. Sinkronisasi & Query Database SQLite
+Secara default, seluruh perintah CLI menggunakan konfigurasi target mesin yang tersimpan di **SQLite (`fingerku.db`)**. Jika flag `--ip` atau `--port` tidak disertakan, CLI akan otomatis membaca pengaturan yang tersimpan di database.
+
+### 1. Service Daemon & Konfigurasi (DB-First)
 ```bash
-# Tarik seluruh log absensi & user dari mesin dan simpan ke database SQLite (dengan pencegahan duplikat)
-./fingerku-cli sync-logs --ip 192.168.1.201 --db fingerku.db
+# Jalankan background runner daemon (otomatis sync user/log & mendengarkan live punch)
+./bin/fingerku-cli run
 
-# Tampilkan log absensi yang tersimpan di SQLite
-./fingerku-cli db-logs --db fingerku.db --limit 50
+# Jalankan runner dengan auto-sync berkala (misal setiap 60 detik)
+./bin/fingerku-cli run --auto-sync-interval 60
 
-# Filter log di SQLite berdasarkan User ID dan rentang tanggal
-./fingerku-cli db-logs --db fingerku.db --user 1001 --from 2026-08-01 --to 2026-08-31
+# Lihat konfigurasi mesin yang saat ini tersimpan di database
+./bin/fingerku-cli config
 
-# Tampilkan ringkasan statistik absensi dari SQLite
-./fingerku-cli db-stats --db fingerku.db
+# Simpan / ubah konfigurasi default mesin ke database SQLite
+./bin/fingerku-cli set-config --ip 192.168.1.201 --port 4370 --password 0
 ```
 
-### 2. Perintah Kontrol & Diagnostik Mesin
+### 2. Sinkronisasi & Query Database SQLite
 ```bash
-# Menampilkan informasi perangkat & kapasitas memori
-./fingerku-cli info --ip 192.168.1.201
+# Tarik seluruh log absensi & user dari mesin dan simpan ke SQLite (dengan deduplikasi)
+./bin/fingerku-cli sync-logs
 
-# Mengambil daftar pengguna yang terdaftar
-./fingerku-cli users --ip 192.168.1.201
+# Tampilkan log absensi yang tersimpan di SQLite
+./bin/fingerku-cli db-logs --limit 50
+
+# Filter log di SQLite berdasarkan User ID dan rentang tanggal
+./bin/fingerku-cli db-logs --user 62593 --from 2026-08-01 --to 2026-08-31
+
+# Tampilkan ringkasan statistik absensi dari SQLite
+./bin/fingerku-cli db-stats
+```
+
+### 3. Perintah Kontrol & Diagnostik Mesin
+```bash
+# Menampilkan informasi perangkat, firmware, jaringan & kapasitas memori
+./bin/fingerku-cli info
+
+# Mengambil daftar pengguna yang terdaftar dari mesin (dan cache ke SQLite)
+./bin/fingerku-cli users
 
 # Mengambil seluruh log absensi langsung dari RAM mesin (Read-Only)
-./fingerku-cli attendance --ip 192.168.1.201
+./bin/fingerku-cli attendance
 
 # Monitoring absensi secara live & otomatis log ke database SQLite
-./fingerku-cli live --ip 192.168.1.201 --db fingerku.db
+./bin/fingerku-cli live
 
 # Membuka relay pintu selama 5 detik
-./fingerku-cli unlock --ip 192.168.1.201 --seconds 5
+./bin/fingerku-cli unlock --seconds 5
 
 # Sinkronisasi jam mesin dengan waktu komputer/server
-./fingerku-cli synctime --ip 192.168.1.201
+./bin/fingerku-cli synctime
 
 # Memutar suara voice prompt index 0 ("Thank you")
-./fingerku-cli voice --ip 192.168.1.201 --index 0
+./bin/fingerku-cli voice --index 0
 
 # Reboot mesin
-./fingerku-cli restart --ip 192.168.1.201
+./bin/fingerku-cli restart
+
+# Matikan mesin
+./bin/fingerku-cli poweroff
 ```
 
 ---
@@ -152,7 +158,7 @@ func main() {
 	client := zk.New("192.168.1.201",
 		zk.WithPort(4370),
 		zk.WithTimeout(10*time.Second),
-		zk.WithPassword(0), // isi jika mesin menggunakan commkey
+		zk.WithPassword(0), // isi jika mesin menggunakan commkey password
 	)
 
 	if err := client.Connect(); err != nil {
@@ -213,25 +219,6 @@ for {
 			ev.UserID, ev.Timestamp.Format("15:04:05"), ev.StatusName())
 	}
 }
-```
-
-### 4. Mendaftarkan User Baru
-
-```go
-newUser := zk.User{
-	UID:       101,
-	UserID:    "101",
-	Name:      "Budi Santoso",
-	Privilege: zk.UserDefault,
-	Password:  "123456",
-	GroupID:   "1",
-	Card:      0,
-}
-
-if err := client.SetUser(newUser); err != nil {
-	log.Fatalf("Gagal mendaftarkan user: %v", err)
-}
-fmt.Println("User berhasil didaftarkan!")
 ```
 
 ---
