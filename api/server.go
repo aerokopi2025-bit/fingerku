@@ -1,8 +1,9 @@
 package api
 
 import (
-	"context"
+	"embed"
 	"fmt"
+	"io/fs"
 	"log"
 	"net/http"
 	"sync"
@@ -15,6 +16,9 @@ import (
 	"fingerku/storage"
 	"fingerku/zk"
 )
+
+//go:embed static/*
+var staticFS embed.FS
 
 // SSEBroker manages connected Server-Sent Events subscribers.
 type SSEBroker struct {
@@ -31,7 +35,7 @@ func newSSEBroker() *SSEBroker {
 func (b *SSEBroker) subscribe() chan []byte {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	ch := make(chan []byte, 16)
+	ch := make(chan []byte, 32)
 	b.clients[ch] = true
 	return ch
 }
@@ -41,6 +45,12 @@ func (b *SSEBroker) unsubscribe(ch chan []byte) {
 	defer b.mu.Unlock()
 	delete(b.clients, ch)
 	close(ch)
+}
+
+func (b *SSEBroker) count() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return len(b.clients)
 }
 
 func (b *SSEBroker) broadcast(data []byte) {
@@ -60,9 +70,7 @@ type Server struct {
 	client       *zk.Client
 	config       storage.DeviceConfig
 	connected    bool
-	mu           sync.RWMutex
-	liveCtx      context.Context
-	liveCancel   context.CancelFunc
+	mu           sync.Mutex
 	broker       *SSEBroker
 	startTime    time.Time
 	autoSyncStop chan struct{}
@@ -118,8 +126,7 @@ func (s *Server) Routes() http.Handler {
 		MaxAge:           300,
 	}))
 
-	// Base health routes
-	r.Get("/", s.handleHealth)
+	// Health endpoint
 	r.Get("/health", s.handleHealth)
 
 	// API v1
@@ -166,6 +173,12 @@ func (s *Server) Routes() http.Handler {
 		r.Get("/events", s.handleSSELiveEvents)
 	})
 
+	// Static UI Dashboard FileServer
+	subFS, err := fs.Sub(staticFS, "static")
+	if err == nil {
+		r.Handle("/*", http.FileServer(http.FS(subFS)))
+	}
+
 	return r
 }
 
@@ -175,7 +188,6 @@ func (s *Server) Connect(cfg storage.DeviceConfig) error {
 	defer s.mu.Unlock()
 
 	if s.connected && s.client != nil {
-		s.stopLiveCaptureLocked()
 		_ = s.client.Disconnect()
 		s.connected = false
 	}
@@ -207,8 +219,7 @@ func (s *Server) Connect(cfg storage.DeviceConfig) error {
 	// Save to DB
 	_ = s.db.SaveDeviceConfig(cfg)
 
-	// Start live capture and auto sync
-	s.startLiveCaptureLocked()
+	// Start auto sync if interval is set
 	s.startAutoSyncLocked()
 
 	log.Printf("[API Server] Successfully connected to ZKTeco machine at %s:%d", cfg.IP, cfg.Port)
@@ -220,7 +231,6 @@ func (s *Server) Disconnect() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.stopLiveCaptureLocked()
 	s.stopAutoSyncLocked()
 
 	if s.client != nil {
@@ -234,55 +244,9 @@ func (s *Server) Disconnect() error {
 
 // IsConnected returns current connection status.
 func (s *Server) IsConnected() bool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return s.connected
-}
-
-func (s *Server) startLiveCaptureLocked() {
-	if !s.connected || s.client == nil {
-		return
-	}
-	s.liveCtx, s.liveCancel = context.WithCancel(context.Background())
-	events, errs := s.client.LiveCapture(s.liveCtx)
-
-	go func() {
-		for {
-			select {
-			case <-s.liveCtx.Done():
-				return
-			case err, ok := <-errs:
-				if ok && err != nil {
-					log.Printf("[API Server] Live capture stream warning: %v", err)
-				}
-				return
-			case ev, ok := <-events:
-				if !ok {
-					return
-				}
-				// Get user name
-				userName := fmt.Sprintf("User %s", ev.UserID)
-				if u, err := s.db.GetUser(ev.UserID); err == nil && u != nil && u.Name != "" {
-					userName = u.Name
-				}
-
-				// Save to SQLite
-				_, _ = s.db.SaveSinglePunch(ev, userName, s.config.IP, "api_live")
-
-				// Broadcast to SSE
-				payload := fmt.Sprintf(`{"user_id":"%s","user_name":"%s","uid":%d,"timestamp":"%s","status":%d,"status_name":"%s","punch":%d}`,
-					ev.UserID, userName, ev.UID, ev.Timestamp.Format(time.RFC3339), ev.Status, ev.StatusName(), ev.Punch)
-				s.broker.broadcast([]byte(payload))
-			}
-		}
-	}()
-}
-
-func (s *Server) stopLiveCaptureLocked() {
-	if s.liveCancel != nil {
-		s.liveCancel()
-		s.liveCancel = nil
-	}
 }
 
 func (s *Server) startAutoSyncLocked() {

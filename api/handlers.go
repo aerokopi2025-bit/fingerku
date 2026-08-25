@@ -23,10 +23,10 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
-	s.mu.RLock()
+	s.mu.Lock()
 	connected := s.connected
 	cfg := s.config
-	s.mu.RUnlock()
+	s.mu.Unlock()
 
 	stats, _ := s.db.GetAttendanceStats()
 	users, _ := s.db.GetUsers()

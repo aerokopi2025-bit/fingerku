@@ -1,21 +1,21 @@
-# fingerku (Go ZKTeco Standalone Library, CLI & REST API)
+# fingerku (ZKTeco REST API, Tailwind CSS v4 Dashboard & Pure Go Library)
 
-`fingerku` adalah library, CLI tool, dan REST API server mandiri (*pure Go*) untuk berkomunikasi langsung dengan mesin absensi dan access control biometrik **ZKTeco / ZKSoftware** melalui protokol socket jaringan (TCP & UDP, default port `4370`), tanpa memerlukan SDK resmi Windows DLL/COM.
+`fingerku` adalah REST API Server mandiri (*pure Go*) dan Web Dashboard berbasis **Tailwind CSS v4** untuk berkomunikasi langsung dengan mesin absensi dan access control biometrik **ZKTeco / ZKSoftware** melalui protokol socket jaringan (TCP & UDP, default port `4370`), tanpa memerlukan SDK resmi Windows DLL/COM.
 
-Dilengkapi dengan penyimpanan lokal **SQLite (`fingerku.db`)**, REST API router berbasis **`go-chi/chi/v5`**, fitur **Live Capture Streaming (SSE)**, dan background service **Runner Daemon**.
+Dibangun menggunakan router **`go-chi/chi/v5`**, database lokal **SQLite (`fingerku.db`)**, frontend modern **Tailwind CSS v4**, dan fitur **Server-Sent Events (SSE)** untuk streaming presensi real-time.
 
 ---
 
 ## Fitur Utama
 
-- 🚀 **Pure Go & Zero Heavy Dependencies**: Hanya menggunakan standard library Go, Chi router (`github.com/go-chi/chi/v5`), dan SQLite embedded driver (`modernc.org/sqlite`).
-- 🌐 **Modern REST API with Chi**: RESTful API lengkap untuk integrasi dengan sistem HRIS, backend Node.js/PHP/Python/Java, atau frontend web/mobile.
-- ⚡ **Server-Sent Events (SSE)**: Streaming event absensi secara live dan seketika via `/api/v1/events`.
-- 🗄️ **SQLite DB-First Integration**: Otomatis membaca & menyimpan konfigurasi perangkat, data user, template sidik jari, audit history, dan riwayat presensi ke SQLite lokal.
-- 👥 **Manajemen User & Biometrik**: Ambil daftar pengguna, template sidik jari, tambah/update pengguna baru, hapus pengguna, dan reset hak akses admin.
-- 📊 **Log Presensi (Attendance Logs)**: Baca seluruh rekaman log absensi dari RAM mesin maupun query terfilter dari SQLite lokal.
-- 🛠️ **Kontrol Hardware**: Sinkronisasi waktu RTC, trigger relay kunci pintu (*door access control*), kontrol layar LCD, tes suara speaker, restart, dan shutdown.
-- 💻 **Interactive CLI Utility**: Dilengkapi CLI `fingerku-cli` untuk kebutuhan automasi dan operasional terminal.
+- 🎨 **Web Dashboard Tailwind CSS v4**: Antarmuka web modern, responsif, dark mode, dan glassmorphic untuk monitoring mesin, manajemen user, ekspor log, dan kontrol hardware.
+- 🚀 **Pure Go & Ringan**: Menggunakan Go standard library, Chi router (`github.com/go-chi/chi/v5`), dan SQLite embedded driver (`modernc.org/sqlite`).
+- 🌐 **RESTful API Lengkap**: Standar JSON API untuk integrasi dengan HRIS, Web App, Mobile App, maupun backend bahasa lain (PHP/Laravel, Node.js, Python, Java, .NET).
+- ⚡ **Real-Time SSE Streaming**: Endpoint `/api/v1/events` untuk mendengarkan event absensi secara live saat pegawai menempelkan jari/kartu/wajah.
+- 🗄️ **SQLite DB-First Integration**: Otomatis menyimpan dan melakukan sinkronisasi data user, template sidik jari, log presensi, dan riwayat audit.
+- 👥 **Manajemen User & Biometrik**: CRUD User, manajemen hak akses (Admin/User), dan ekstraksi template sidik jari biometrik.
+- 📊 **Log Presensi & Filter**: Query log presensi terfilter berdasarkan User ID, rentang tanggal, status masuk/keluar, dan pagination.
+- 🛠️ **Kontrol Perangkat**: Sinkronisasi waktu RTC, buka relay kunci pintu (*door access control*), kontrol layar LCD, tes suara speaker, restart, dan shutdown.
 
 ---
 
@@ -24,12 +24,17 @@ Dilengkapi dengan penyimpanan lokal **SQLite (`fingerku.db`)**, REST API router 
 ```
 fingerku/
 ├── go.mod
-├── Makefile                    # Target build, run, serve, test, clean
-├── README.md
+├── Makefile                    # Target build, serve, dev, test, clean
+├── README.md                   # Dokumentasi REST API & Web Dashboard
 ├── api/                        # REST API Package (Chi Router & Handlers)
 │   ├── server.go               # Server struct, SSE broker, middleware & routes
 │   ├── handlers.go             # REST API endpoint handlers
-│   └── response.go             # Standard JSON response helpers
+│   ├── response.go             # Standard JSON response helpers
+│   └── static/                 # Embedded Tailwind v4 frontend assets (index.html, style.css, app.js)
+├── web/                        # Frontend Source (Tailwind CSS v4)
+│   ├── package.json            # Node & Tailwind v4 CLI scripts
+│   ├── src/input.css           # Tailwind v4 CSS input (@import "tailwindcss";)
+│   └── static/                 # Output HTML, JS & compiled CSS
 ├── storage/                    # SQLite Storage Layer
 │   ├── models.go               # Struct database, DeviceConfig, AttendanceRecord
 │   ├── db.go                   # SQLite schema, CRUD operations, WAL mode
@@ -50,146 +55,99 @@ fingerku/
 └── cmd/
     ├── fingerku-api/           # Standalone REST API Server Binary
     │   └── main.go
-    ├── fingerku-cli/           # CLI Application & Background Runner
-    │   └── main.go
-    └── examples/               # Contoh kode fungsional
-        ├── basic/              # Koneksi & info dasar
-        ├── attendance/         # Mengambil log absensi
-        ├── live/               # Real-time event monitor
-        ├── users/              # Manajemen data user
-        └── backup/             # Backup seluruh data ke JSON
+    └── examples/               # Contoh kode fungsional Go
 ```
 
 ---
 
-## Instalasi & Build
+## Menjalankan Mode Development & Production
 
+### 1. Mode Fullstack Developer (Backend Go + Frontend Vite HMR)
 ```bash
-# Build binary CLI dan API server ke folder bin/
+# Menjalankan Backend API (Port 8080) dan Frontend Vite (Port 5173) secara bersamaan
+make dev
+```
+- **Frontend Vite Live Reload (HMR)**: `http://localhost:5173` *(Realtime update setiap file diedit)*
+- **Backend REST API**: `http://localhost:8080/api/v1`
+- Tekan `Ctrl+C` untuk mematikan semua service secara bersamaan.
+
+### 2. Mode Production Server (Embedded Single Binary)
+```bash
+# Kompilasi Tailwind CSS v4 & build executable mandiri
 make build
 
-# Jalankan REST API Server (Chi) pada port 8080
+# Menjalankan binary mandiri
+./bin/fingerku-api --port 8080 --db fingerku.db
+# atau:
 make serve
-
-# Jalankan background runner daemon (CLI Mode)
-make dev
-
-# Menjalankan unit tests
-make test
 ```
+Buka browser di **`http://localhost:8080`** untuk mengakses Web Dashboard.
 
 ---
 
-## REST API Server (`go-chi/chi/v5`)
+## Dokumentasi REST API
 
-API Server dapat dijalankan menggunakan:
-```bash
-./bin/fingerku-api --port 8080
-# atau menggunakan CLI:
-./bin/fingerku-cli serve --api-port 8080
-```
+Base URL: `http://localhost:8080`
 
-### Ringkasan Endpoint API:
+### 1. Health & Status
+- **`GET /health`**
+  - Response: `{"success": true, "data": {"service": "fingerku-api", "status": "healthy", "time": "..."}}`
+- **`GET /api/v1/status`**
+  - Mengembalikan status koneksi mesin, uptime, dan statistik SQLite.
 
-| Method | Endpoint | Deskripsi |
-|---|---|---|
-| `GET` | `/health` | Health check service & uptime |
-| `GET` | `/api/v1/status` | Status koneksi mesin, statistik SQLite & uptime |
-| `GET` | `/api/v1/config` | Membaca konfigurasi perangkat dari SQLite |
-| `PUT` | `/api/v1/config` | Memperbarui konfigurasi perangkat di SQLite |
-| `POST` | `/api/v1/device/connect` | Menghubungkan ke mesin ZKTeco |
-| `POST` | `/api/v1/device/disconnect` | Memutuskan koneksi dari mesin |
-| `GET` | `/api/v1/device/info` | Informasi firmware, serial, MAC & kapasitas memori |
-| `POST` | `/api/v1/device/unlock` | Buka relay pintu (*access control*) `{"seconds": 5}` |
-| `POST` | `/api/v1/device/synctime` | Sinkronisasi jam RTC mesin dengan jam server |
-| `POST` | `/api/v1/device/voice` | Putar prompt suara speaker `{"index": 0}` |
-| `POST` | `/api/v1/device/restart` | Reboot mesin ZKTeco |
-| `POST` | `/api/v1/device/poweroff` | Matikan mesin ZKTeco |
-| `GET` | `/api/v1/users` | Daftar user terdaftar (beserta info role & jumlah sidik jari) |
-| `POST` | `/api/v1/users` | Tambah atau update user di mesin & SQLite |
-| `GET` | `/api/v1/users/{id}` | Detail user beserta template sidik jarinya |
-| `DELETE` | `/api/v1/users/{id}` | Hapus user dari mesin dan SQLite |
-| `GET` | `/api/v1/templates` | Daftar seluruh template sidik jari biometrik |
-| `GET` | `/api/v1/users/{id}/templates` | Daftar template sidik jari untuk user tertentu |
-| `GET` | `/api/v1/attendance` | Query log presensi SQLite (`?user_id=...&from=...&to=...&page=1&limit=50`) |
-| `GET` | `/api/v1/attendance/stats` | Ringkasan statistik absensi (total, hari ini, breakdown status) |
-| `GET` | `/api/v1/attendance/machine` | Membaca log presensi langsung dari RAM mesin (*Read-Only*) |
-| `POST` | `/api/v1/sync` | Trigger manual sinkronisasi user, sidik jari, & log ke SQLite |
-| `GET` | `/api/v1/sync/history` | Riwayat audit sinkronisasi |
-| `GET` | `/api/v1/events` | Real-time Server-Sent Events (SSE) stream untuk tap biometrik |
+### 2. Konfigurasi Mesin (SQLite)
+- **`GET /api/v1/config`**
+  - Mengambil pengaturan mesin yang tersimpan di SQLite.
+- **`PUT /api/v1/config`**
+  - Memperbarui konfigurasi mesin di SQLite.
 
----
+### 3. Pengguna & Biometrik Sidik Jari
+- **`GET /api/v1/users`**
+  - Mengambil seluruh pengguna terdaftar beserta jumlah sidik jarinya.
+- **`GET /api/v1/users/{id}`**
+  - Mengambil detail profil user beserta data template sidik jarinya.
+- **`POST /api/v1/users`**
+  - Mendaftarkan atau memperbarui pengguna di mesin dan SQLite.
+- **`DELETE /api/v1/users/{id}`**
+  - Menghapus user dan template sidik jarinya dari mesin dan SQLite.
+- **`GET /api/v1/templates`**
+  - Mengambil seluruh template sidik jari biometrik dari database.
+- **`GET /api/v1/users/{id}/templates`**
+  - Mengambil template sidik jari milik user tertentu.
 
-## Penggunaan CLI (`fingerku-cli`)
+### 4. Log Presensi (*Attendance Logs*)
+- **`GET /api/v1/attendance`**
+  - Query log presensi tersimpan di SQLite dengan pagination & filter (`?user_id=...&from=...&to=...&page=1&limit=50`).
+- **`GET /api/v1/attendance/stats`**
+  - Ringkasan statistik (total log, hadir hari ini, breakdown status).
+- **`GET /api/v1/attendance/machine`**
+  - Membaca log presensi langsung dari RAM mesin (*Read-Only*).
 
-### 1. Service & Konfigurasi (DB-First)
-```bash
-# Jalankan REST API Server
-./bin/fingerku-cli serve --api-port 8080
+### 5. Sinkronisasi & Kontrol Hardware
+- **`POST /api/v1/sync`**
+  - Memicu sinkronisasi manual data user, template sidik jari, dan log presensi dari mesin ke SQLite.
+- **`GET /api/v1/sync/history`**
+  - Riwayat log sinkronisasi database.
+- **`POST /api/v1/device/connect`**
+  - Menghubungkan ke mesin fisik.
+- **`POST /api/v1/device/disconnect`**
+  - Memutuskan koneksi ke mesin.
+- **`GET /api/v1/device/info`**
+  - Informasi detail hardware, firmware, serial number, MAC, dan kapasitas memori.
+- **`POST /api/v1/device/unlock`**
+  - Memicu relay kunci pintu (*door access control*): `{"seconds": 5}`.
+- **`POST /api/v1/device/synctime`**
+  - Menyamakan jam RTC mesin dengan jam server.
+- **`POST /api/v1/device/voice`**
+  - Memutar prompt suara speaker: `{"index": 0}`.
+- **`POST /api/v1/device/restart`**
+  - Reboot mesin ZKTeco.
+- **`POST /api/v1/device/poweroff`**
+  - Matikan mesin ZKTeco.
 
-# Jalankan background runner daemon
-./bin/fingerku-cli run
-
-# Lihat konfigurasi mesin yang tersimpan di database
-./bin/fingerku-cli config
-
-# Simpan / ubah konfigurasi default mesin ke database SQLite
-./bin/fingerku-cli set-config --ip 192.168.1.201 --port 4370 --password 0
-```
-
-### 2. Sinkronisasi & Query Database SQLite
-```bash
-# Tarik seluruh user, template sidik jari biometrik & log absensi dari mesin dan simpan ke SQLite
-./bin/fingerku-cli sync-logs
-
-# Tampilkan daftar pengguna yang tersimpan di SQLite
-./bin/fingerku-cli db-users
-
-# Tampilkan template sidik jari biometrik yang tersimpan di SQLite
-./bin/fingerku-cli db-templates
-
-# Tampilkan log absensi yang tersimpan di SQLite
-./bin/fingerku-cli db-logs --limit 50
-
-# Filter log di SQLite berdasarkan User ID dan rentang tanggal
-./bin/fingerku-cli db-logs --user 62593 --from 2026-08-01 --to 2026-08-31
-
-# Tampilkan ringkasan statistik absensi dari SQLite
-./bin/fingerku-cli db-stats
-```
-
-### 3. Perintah Kontrol & Diagnostik Mesin
-```bash
-# Menampilkan informasi perangkat, firmware, jaringan & kapasitas memori
-./bin/fingerku-cli info
-
-# Mengambil daftar pengguna & template sidik jari dari mesin (dan cache ke SQLite)
-./bin/fingerku-cli users
-
-# Mengambil template sidik jari biometrik dari mesin
-./bin/fingerku-cli templates
-
-# Mengambil seluruh log absensi langsung dari RAM mesin (Read-Only)
-./bin/fingerku-cli attendance
-
-# Monitoring absensi secara live & otomatis log ke database SQLite
-./bin/fingerku-cli live
-
-# Membuka relay pintu selama 5 detik
-./bin/fingerku-cli unlock --seconds 5
-
-# Sinkronisasi jam mesin dengan waktu komputer/server
-./bin/fingerku-cli synctime
-
-# Memutar suara voice prompt index 0 ("Thank you")
-./bin/fingerku-cli voice --index 0
-
-# Reboot mesin
-./bin/fingerku-cli restart
-
-# Matikan mesin
-./bin/fingerku-cli poweroff
-```
+### 6. Real-Time Event Streaming (SSE)
+- **`GET /api/v1/events`**
+  - Server-Sent Events (SSE) stream untuk tap biometrik real-time.
 
 ---
 

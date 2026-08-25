@@ -1,0 +1,773 @@
+<!DOCTYPE html>
+<html lang="id" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fingerku - ZKTeco Biometric API Dashboard</title>
+    <link rel="stylesheet" href="/style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Plus Jakarta Sans', sans-serif; }
+        code, pre, .font-mono { font-family: 'JetBrains Mono', monospace; }
+    </style>
+    <script>
+        // Inline script to prevent theme flashbang
+        (function() {
+            const saved = localStorage.getItem('fingerku-theme') || 'system';
+            const isDark = saved === 'dark' || (saved === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+            if (isDark) {
+                document.documentElement.classList.add('dark');
+            } else {
+                document.documentElement.classList.remove('dark');
+            }
+        })();
+    </script>
+</head>
+<body class="bg-slate-100 text-slate-800 dark:bg-slate-950 dark:text-slate-100 min-h-screen flex flex-col selection:bg-emerald-500 selection:text-slate-950">
+
+    <!-- HEADER / NAVIGATION BAR -->
+    <header class="sticky top-0 z-40 border-b border-slate-200 dark:border-slate-800/80 bg-white/80 dark:bg-slate-950/80 backdrop-blur-xl transition-colors duration-200">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex items-center justify-between h-16 gap-4">
+                
+                <!-- Brand & Logo -->
+                <div class="flex items-center gap-3">
+                    <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-emerald-600 via-teal-500 to-cyan-400 flex items-center justify-center shadow-lg shadow-emerald-500/20 ring-1 ring-emerald-400/30">
+                        <svg class="w-6 h-6 text-slate-950" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M12 11c0 3.517-1.009 6.799-2.753 9.571m-3.44-2.04l.054-.09A13.916 13.916 0 008 11a4 4 0 118 0c0 1.017-.07 2.019-.203 3m-2.118 6.844A21.88 21.88 0 0015.171 17m3.839 1.132c.645-2.266.99-4.659.99-7.132A8 8 0 004.07 3.755"/>
+                            <path d="M15 15.5c-.5 1.5-1.5 2.5-3 2.5"/>
+                            <path d="M12 2a10 10 0 0 0-10 10c0 3.5 1.5 6.5 4 8.5"/>
+                            <path d="M22 12a10 10 0 0 0-10-10"/>
+                        </svg>
+                    </div>
+                    <div>
+                        <div class="flex items-center gap-2">
+                            <h1 class="text-lg font-extrabold tracking-tight text-slate-900 dark:text-white">Fingerku</h1>
+                            <span class="px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30">API v1</span>
+                        </div>
+                        <p class="text-xs text-slate-500 dark:text-slate-400 font-medium">ZKTeco Biometrics & SQLite Sync Engine</p>
+                    </div>
+                </div>
+
+                <!-- Live Status Indicators, Actions & Theme Selector -->
+                <div class="flex items-center gap-2 sm:gap-3">
+                    
+                    <!-- Device Status Badge -->
+                    <div id="header-status-badge" class="flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/30">
+                        <span class="inline-flex rounded-full h-2 w-2 bg-rose-500"></span>
+                        <span id="header-status-text">TERPUTUS</span>
+                    </div>
+
+                    <!-- SQLite Records Count Badge -->
+                    <div class="hidden lg:flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold bg-slate-100 dark:bg-slate-800/80 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
+                        <svg class="w-3.5 h-3.5 text-cyan-500 dark:text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4"/></svg>
+                        <span id="header-db-records">0 Rekaman SQLite</span>
+                    </div>
+
+                    <!-- Sync Now Button -->
+                    <button id="btn-header-sync" onclick="App.triggerSync()" class="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold bg-emerald-500 hover:bg-emerald-400 text-slate-950 transition-all shadow-md shadow-emerald-500/20 active:scale-95 cursor-pointer">
+                        <svg class="w-4 h-4" id="icon-header-sync" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                        <span>Sinkronisasi</span>
+                    </button>
+
+                    <!-- Theme Switcher Segmented Control -->
+                    <div class="relative inline-block text-left">
+                        <div class="flex items-center p-1 rounded-xl bg-slate-200/80 dark:bg-slate-800/80 border border-slate-300 dark:border-slate-700/80">
+                            <!-- Light Button -->
+                            <button onclick="App.setTheme('light')" id="theme-btn-light" class="p-1.5 rounded-lg text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-all cursor-pointer" title="Tema Terang (Light)">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"/></svg>
+                            </button>
+                            <!-- Dark Button -->
+                            <button onclick="App.setTheme('dark')" id="theme-btn-dark" class="p-1.5 rounded-lg text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-all cursor-pointer" title="Tema Gelap (Dark)">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"/></svg>
+                            </button>
+                            <!-- System Button -->
+                            <button onclick="App.setTheme('system')" id="theme-btn-system" class="p-1.5 rounded-lg text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-all cursor-pointer" title="Ikuti Pengaturan Sistem (Auto)">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Settings Button -->
+                    <button onclick="App.openConfigModal()" class="p-2 rounded-xl bg-slate-200/80 hover:bg-slate-300 dark:bg-slate-800/80 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white border border-slate-300 dark:border-slate-700 transition-all active:scale-95 cursor-pointer" title="Pengaturan Koneksi">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Navigation Tabs Bar -->
+            <nav class="flex space-x-1 sm:space-x-2 border-t border-slate-200 dark:border-slate-800/60 overflow-x-auto py-2 scrollbar-none" aria-label="Tabs">
+                <button onclick="App.setTab('dashboard')" id="tab-btn-dashboard" class="tab-btn flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 cursor-pointer">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/></svg>
+                    <span>Dashboard</span>
+                </button>
+                <button onclick="App.setTab('live')" id="tab-btn-live" class="tab-btn flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-200/60 dark:hover:bg-slate-800/60 cursor-pointer">
+                    <span class="relative flex h-2 w-2">
+                        <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                        <span class="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                    </span>
+                    <span>Live Presensi</span>
+                </button>
+                <button onclick="App.setTab('users')" id="tab-btn-users" class="tab-btn flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-200/60 dark:hover:bg-slate-800/60 cursor-pointer">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"/></svg>
+                    <span>Pengguna Mesin</span>
+                </button>
+                <button onclick="App.setTab('templates')" id="tab-btn-templates" class="tab-btn flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-200/60 dark:hover:bg-slate-800/60 cursor-pointer">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 11c0 3.517-1.009 6.799-2.753 9.571m-3.44-2.04l.054-.09A13.916 13.916 0 008 11a4 4 0 118 0c0 1.017-.07 2.019-.203 3m-2.118 6.844A21.88 21.88 0 0015.171 17m3.839 1.132c.645-2.266.99-4.659.99-7.132A8 8 0 004.07 3.755"/></svg>
+                    <span>Biometrik Sidik Jari</span>
+                </button>
+                <button onclick="App.setTab('attendance')" id="tab-btn-attendance" class="tab-btn flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-200/60 dark:hover:bg-slate-800/60 cursor-pointer">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01"/></svg>
+                    <span>Log Presensi SQLite</span>
+                </button>
+                <button onclick="App.setTab('hardware')" id="tab-btn-hardware" class="tab-btn flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-200/60 dark:hover:bg-slate-800/60 cursor-pointer">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"/></svg>
+                    <span>Kontrol Perangkat</span>
+                </button>
+                <button onclick="App.setTab('history')" id="tab-btn-history" class="tab-btn flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-200/60 dark:hover:bg-slate-800/60 cursor-pointer">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                    <span>Riwayat Audit</span>
+                </button>
+            </nav>
+        </div>
+    </header>
+
+    <!-- MAIN CONTENT AREA -->
+    <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
+
+        <!-- ============================================================== -->
+        <!-- TAB 1: DASHBOARD -->
+        <!-- ============================================================== -->
+        <div id="view-dashboard" class="space-y-6">
+            
+            <!-- KPI Metric Cards -->
+            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                
+                <!-- Card 1: Total Presensi -->
+                <div class="glass-panel glass-panel-hover p-5 rounded-2xl relative overflow-hidden">
+                    <div class="flex items-center justify-between">
+                        <span class="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Total Rekaman Presensi</span>
+                        <div class="p-2 rounded-xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/></svg>
+                        </div>
+                    </div>
+                    <div class="mt-4 flex items-baseline gap-2">
+                        <span id="kpi-total-records" class="text-3xl font-extrabold text-slate-900 dark:text-white tracking-tight">0</span>
+                        <span class="text-xs text-slate-500 dark:text-slate-400 font-medium">di SQLite</span>
+                    </div>
+                </div>
+
+                <!-- Card 2: Hadir Hari Ini -->
+                <div class="glass-panel glass-panel-hover p-5 rounded-2xl relative overflow-hidden">
+                    <div class="flex items-center justify-between">
+                        <span class="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Presensi Hari Ini</span>
+                        <div class="p-2 rounded-xl bg-cyan-500/10 text-cyan-600 dark:text-cyan-400 border border-cyan-500/20">
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                        </div>
+                    </div>
+                    <div class="mt-4 flex items-baseline gap-2">
+                        <span id="kpi-today-records" class="text-3xl font-extrabold text-cyan-600 dark:text-cyan-400 tracking-tight">0</span>
+                        <span id="kpi-today-users" class="text-xs text-slate-500 dark:text-slate-400 font-medium">(0 Pegawai Unik)</span>
+                    </div>
+                </div>
+
+                <!-- Card 3: Total Pengguna -->
+                <div class="glass-panel glass-panel-hover p-5 rounded-2xl relative overflow-hidden">
+                    <div class="flex items-center justify-between">
+                        <span class="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Pengguna Terdaftar</span>
+                        <div class="p-2 rounded-xl bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border border-indigo-500/20">
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
+                        </div>
+                    </div>
+                    <div class="mt-4 flex items-baseline gap-2">
+                        <span id="kpi-total-users" class="text-3xl font-extrabold text-indigo-600 dark:text-indigo-400 tracking-tight">0</span>
+                        <span id="kpi-total-users-sub" class="text-xs text-slate-500 dark:text-slate-400 font-medium">User di Mesin</span>
+                    </div>
+                </div>
+
+                <!-- Card 4: Template Sidik Jari -->
+                <div class="glass-panel glass-panel-hover p-5 rounded-2xl relative overflow-hidden">
+                    <div class="flex items-center justify-between">
+                        <span class="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Template Biometrik</span>
+                        <div class="p-2 rounded-xl bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20">
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 11c0 3.517-1.009 6.799-2.753 9.571m-3.44-2.04l.054-.09A13.916 13.916 0 008 11a4 4 0 118 0c0 1.017-.07 2.019-.203 3m-2.118 6.844A21.88 21.88 0 0015.171 17m3.839 1.132c.645-2.266.99-4.659.99-7.132A8 8 0 004.07 3.755"/></svg>
+                        </div>
+                    </div>
+                    <div class="mt-4 flex items-baseline gap-2">
+                        <span id="kpi-total-templates" class="text-3xl font-extrabold text-amber-600 dark:text-amber-400 tracking-tight">0</span>
+                        <span class="text-xs text-slate-500 dark:text-slate-400 font-medium">Sidik Jari</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Hardware Information & Device Status Grid -->
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                
+                <!-- Hardware Specs Card -->
+                <div class="lg:col-span-2 glass-panel p-6 rounded-2xl">
+                    <div class="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-4 mb-4">
+                        <div class="flex items-center gap-2.5">
+                            <div class="p-2 rounded-lg bg-slate-200/80 dark:bg-slate-800 text-emerald-600 dark:text-emerald-400">
+                                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/></svg>
+                            </div>
+                            <div>
+                                <h3 class="font-bold text-slate-900 dark:text-white text-base">Spesifikasi Hardware ZKTeco</h3>
+                                <p class="text-xs text-slate-500 dark:text-slate-400">Informasi mesin dan kapasitas penyimpanan RAM</p>
+                            </div>
+                        </div>
+                        <button onclick="App.loadDeviceInfo()" class="text-xs font-semibold text-emerald-600 dark:text-emerald-400 hover:text-emerald-500 flex items-center gap-1 cursor-pointer">
+                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                            <span>Refresh Info</span>
+                        </button>
+                    </div>
+
+                    <div class="grid grid-cols-2 sm:grid-cols-3 gap-4 text-xs font-mono">
+                        <div class="bg-slate-100/70 dark:bg-slate-900/60 p-3.5 rounded-xl border border-slate-200 dark:border-slate-800/80">
+                            <span class="text-slate-500 block text-[10px] uppercase font-bold tracking-wider mb-1">Nama Mesin</span>
+                            <span id="dev-name" class="font-bold text-slate-800 dark:text-slate-200 text-sm">-</span>
+                        </div>
+                        <div class="bg-slate-100/70 dark:bg-slate-900/60 p-3.5 rounded-xl border border-slate-200 dark:border-slate-800/80">
+                            <span class="text-slate-500 block text-[10px] uppercase font-bold tracking-wider mb-1">Platform</span>
+                            <span id="dev-platform" class="font-bold text-slate-800 dark:text-slate-200 text-sm">-</span>
+                        </div>
+                        <div class="bg-slate-100/70 dark:bg-slate-900/60 p-3.5 rounded-xl border border-slate-200 dark:border-slate-800/80">
+                            <span class="text-slate-500 block text-[10px] uppercase font-bold tracking-wider mb-1">Nomor Seri</span>
+                            <span id="dev-serial" class="font-bold text-emerald-600 dark:text-emerald-400 text-sm">-</span>
+                        </div>
+                        <div class="bg-slate-100/70 dark:bg-slate-900/60 p-3.5 rounded-xl border border-slate-200 dark:border-slate-800/80">
+                            <span class="text-slate-500 block text-[10px] uppercase font-bold tracking-wider mb-1">Firmware</span>
+                            <span id="dev-firmware" class="font-bold text-slate-800 dark:text-slate-200">-</span>
+                        </div>
+                        <div class="bg-slate-100/70 dark:bg-slate-900/60 p-3.5 rounded-xl border border-slate-200 dark:border-slate-800/80">
+                            <span class="text-slate-500 block text-[10px] uppercase font-bold tracking-wider mb-1">Alamat MAC</span>
+                            <span id="dev-mac" class="font-bold text-slate-800 dark:text-slate-200">-</span>
+                        </div>
+                        <div class="bg-slate-100/70 dark:bg-slate-900/60 p-3.5 rounded-xl border border-slate-200 dark:border-slate-800/80">
+                            <span class="text-slate-500 block text-[10px] uppercase font-bold tracking-wider mb-1">Waktu RTC Mesin</span>
+                            <span id="dev-time" class="font-bold text-cyan-600 dark:text-cyan-400">-</span>
+                        </div>
+                    </div>
+
+                    <!-- Progress Bars Capacity -->
+                    <div class="mt-5 pt-4 border-t border-slate-200 dark:border-slate-800/80 space-y-3">
+                        <div>
+                            <div class="flex justify-between text-xs font-semibold mb-1">
+                                <span class="text-slate-500 dark:text-slate-400">Penggunaan Log Presensi di Mesin</span>
+                                <span id="cap-records-label" class="text-slate-800 dark:text-slate-200 font-mono">0 / 0</span>
+                            </div>
+                            <div class="w-full h-2 bg-slate-200 dark:bg-slate-800 rounded-full overflow-hidden">
+                                <div id="cap-records-bar" class="h-full bg-emerald-500 rounded-full transition-all duration-500" style="width: 0%"></div>
+                            </div>
+                        </div>
+                        <div>
+                            <div class="flex justify-between text-xs font-semibold mb-1">
+                                <span class="text-slate-500 dark:text-slate-400">Kapasitas Template Sidik Jari</span>
+                                <span id="cap-fingers-label" class="text-slate-800 dark:text-slate-200 font-mono">0 / 0</span>
+                            </div>
+                            <div class="w-full h-2 bg-slate-200 dark:bg-slate-800 rounded-full overflow-hidden">
+                                <div id="cap-fingers-bar" class="h-full bg-cyan-500 rounded-full transition-all duration-500" style="width: 0%"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Breakdown by Status Card -->
+                <div class="glass-panel p-6 rounded-2xl flex flex-col justify-between">
+                    <div>
+                        <div class="flex items-center gap-2.5 border-b border-slate-200 dark:border-slate-800 pb-4 mb-4">
+                            <div class="p-2 rounded-lg bg-slate-200/80 dark:bg-slate-800 text-cyan-600 dark:text-cyan-400">
+                                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 3.055A9.001 9.001 0 1020.945 13H11V3.055z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.488 9H15V3.512A9.025 9.025 0 0120.488 9z"/></svg>
+                            </div>
+                            <div>
+                                <h3 class="font-bold text-slate-900 dark:text-white text-base">Distribusi Status</h3>
+                                <p class="text-xs text-slate-500 dark:text-slate-400">Breakdown tipe tap absensi di SQLite</p>
+                            </div>
+                        </div>
+                        <div id="status-counts-container" class="space-y-2.5 text-xs font-mono">
+                            <div class="text-slate-500 text-center py-6">Memuat statistik...</div>
+                        </div>
+                    </div>
+
+                    <div class="mt-4 pt-4 border-t border-slate-200 dark:border-slate-800/80">
+                        <button onclick="App.setTab('attendance')" class="w-full py-2.5 rounded-xl bg-slate-200 hover:bg-slate-300 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 text-xs font-bold transition-colors cursor-pointer text-center">
+                            Lihat Semua Log Presensi →
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ============================================================== -->
+        <!-- TAB 2: LIVE ATTENDANCE (KIOSK STREAM) -->
+        <!-- ============================================================== -->
+        <div id="view-live" class="hidden space-y-6">
+            
+            <!-- Hero Punch Card -->
+            <div id="kiosk-hero-card" class="glass-panel p-8 rounded-3xl border border-slate-200 dark:border-slate-800 text-center transition-all duration-500">
+                <div class="max-w-md mx-auto">
+                    <div class="w-20 h-20 rounded-2xl bg-slate-200 dark:bg-slate-800 flex items-center justify-center mx-auto text-slate-500 dark:text-slate-400 mb-4 ring-1 ring-slate-300 dark:ring-slate-700">
+                        <svg class="w-10 h-10 animate-pulse text-emerald-500 dark:text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 11c0 3.517-1.009 6.799-2.753 9.571m-3.44-2.04l.054-.09A13.916 13.916 0 008 11a4 4 0 118 0c0 1.017-.07 2.019-.203 3m-2.118 6.844A21.88 21.88 0 0015.171 17m3.839 1.132c.645-2.266.99-4.659.99-7.132A8 8 0 004.07 3.755"/></svg>
+                    </div>
+                    <h2 class="text-2xl font-extrabold text-slate-900 dark:text-white tracking-tight">Menunggu Scan Biometrik...</h2>
+                    <p class="text-sm text-slate-500 dark:text-slate-400 mt-2">Setiap pegawai menempelkan jari/kartu di mesin, notifikasi dan data akan langsung muncul di sini secara real-time via Server-Sent Events.</p>
+                </div>
+            </div>
+
+            <!-- Real-time Live Ticker Table -->
+            <div class="glass-panel p-6 rounded-2xl">
+                <div class="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-4 mb-4">
+                    <div>
+                        <h3 class="font-bold text-slate-900 dark:text-white text-base">Riwayat Tap Seketika</h3>
+                        <p class="text-xs text-slate-500 dark:text-slate-400">Daftar presensi yang tertangkap dalam sesi live stream saat ini</p>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <span class="inline-flex h-2.5 w-2.5 rounded-full bg-emerald-500 animate-ping"></span>
+                        <span class="text-xs font-mono text-emerald-600 dark:text-emerald-400 font-bold">SSE STREAM ACTIVE</span>
+                    </div>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left text-sm">
+                        <thead class="text-xs uppercase bg-slate-100 dark:bg-slate-900/60 text-slate-500 dark:text-slate-400 font-mono border-b border-slate-200 dark:border-slate-800">
+                            <tr>
+                                <th class="py-3 px-4">Waktu</th>
+                                <th class="py-3 px-4">User ID</th>
+                                <th class="py-3 px-4">Nama Pegawai</th>
+                                <th class="py-3 px-4">Tipe Status</th>
+                                <th class="py-3 px-4">Info Mesin</th>
+                            </tr>
+                        </thead>
+                        <tbody id="live-stream-table-body">
+                            <tr><td colspan="5" class="py-8 text-center text-slate-500">Belum ada data tap pada sesi ini</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- ============================================================== -->
+        <!-- TAB 3: ENROLLED USERS -->
+        <!-- ============================================================== -->
+        <div id="view-users" class="hidden space-y-6">
+            <div class="glass-panel p-6 rounded-2xl">
+                <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-200 dark:border-slate-800 pb-4 mb-6">
+                    <div>
+                        <div class="flex items-center gap-2.5">
+                            <h3 class="font-bold text-slate-900 dark:text-white text-lg">Daftar Pengguna Mesin</h3>
+                            <span id="users-count-badge" class="px-2.5 py-0.5 rounded-full text-xs font-bold bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border border-indigo-500/30">0 User</span>
+                        </div>
+                        <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">Data profil pengguna terdaftar beserta jumlah sidik jari biometrik</p>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <button onclick="App.openAddUserModal()" class="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-lg shadow-emerald-600/20 active:scale-95 transition-all cursor-pointer">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+                            <span>Tambah Pengguna</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Filter Controls -->
+                <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-6">
+                    <div class="sm:col-span-2 relative">
+                        <input type="text" id="user-search-input" oninput="App.filterUsers()" placeholder="Cari berdasarkan Nama, User ID, atau UID..." class="w-full pl-10 pr-4 py-2.5 bg-slate-100 dark:bg-slate-900/80 border border-slate-300 dark:border-slate-800 rounded-xl text-xs text-slate-900 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/50">
+                        <svg class="w-4 h-4 text-slate-400 dark:text-slate-500 absolute left-3.5 top-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+                    </div>
+                    <div>
+                        <select id="user-role-filter" onchange="App.filterUsers()" class="w-full px-3 py-2.5 bg-slate-100 dark:bg-slate-900/80 border border-slate-300 dark:border-slate-800 rounded-xl text-xs text-slate-800 dark:text-slate-300 focus:outline-none focus:ring-2 focus:ring-emerald-500/50">
+                            <option value="all">Semua Hak Akses (Role)</option>
+                            <option value="user">User Biasa</option>
+                            <option value="admin">Administrator</option>
+                            <option value="manager">Manager</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- Users Table -->
+                <div class="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800/80">
+                    <table class="w-full text-left text-xs">
+                        <thead class="bg-slate-100 dark:bg-slate-900/80 text-slate-500 dark:text-slate-400 uppercase font-mono border-b border-slate-200 dark:border-slate-800">
+                            <tr>
+                                <th class="py-3.5 px-4">UID</th>
+                                <th class="py-3.5 px-4">User ID</th>
+                                <th class="py-3.5 px-4">Nama Lengkap</th>
+                                <th class="py-3.5 px-4">Sidik Jari</th>
+                                <th class="py-3.5 px-4">Hak Akses (Role)</th>
+                                <th class="py-3.5 px-4">Nomor Kartu</th>
+                                <th class="py-3.5 px-4 text-right">Aksi</th>
+                            </tr>
+                        </thead>
+                        <tbody id="users-table-body">
+                            <!-- Populated dynamically -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- ============================================================== -->
+        <!-- TAB 4: BIOMETRIC TEMPLATES -->
+        <!-- ============================================================== -->
+        <div id="view-templates" class="hidden space-y-6">
+            <div class="glass-panel p-6 rounded-2xl">
+                <div class="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-4 mb-6">
+                    <div>
+                        <div class="flex items-center gap-2.5">
+                            <h3 class="font-bold text-slate-900 dark:text-white text-lg">Template Biometrik Sidik Jari</h3>
+                            <span id="templates-count-badge" class="px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/30">0 Template</span>
+                        </div>
+                        <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">Data template biner sidik jari yang tersimpan di SQLite</p>
+                    </div>
+                    <button onclick="App.loadTemplates()" class="text-xs font-semibold text-emerald-600 dark:text-emerald-400 hover:text-emerald-500 flex items-center gap-1 cursor-pointer">
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                        <span>Refresh Data</span>
+                    </button>
+                </div>
+
+                <!-- Templates Table -->
+                <div class="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800/80">
+                    <table class="w-full text-left text-xs font-mono">
+                        <thead class="bg-slate-100 dark:bg-slate-900/80 text-slate-500 dark:text-slate-400 uppercase border-b border-slate-200 dark:border-slate-800">
+                            <tr>
+                                <th class="py-3 px-4">UID</th>
+                                <th class="py-3 px-4">Finger ID (FID)</th>
+                                <th class="py-3 px-4">Status Valid</th>
+                                <th class="py-3 px-4">Ukuran Data</th>
+                                <th class="py-3 px-4">Sample Hex Template</th>
+                            </tr>
+                        </thead>
+                        <tbody id="templates-table-body">
+                            <!-- Populated dynamically -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- ============================================================== -->
+        <!-- TAB 5: ATTENDANCE LOGS (SQLITE) -->
+        <!-- ============================================================== -->
+        <div id="view-attendance" class="hidden space-y-6">
+            <div class="glass-panel p-6 rounded-2xl">
+                <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-200 dark:border-slate-800 pb-4 mb-6">
+                    <div>
+                        <div class="flex items-center gap-2.5">
+                            <h3 class="font-bold text-slate-900 dark:text-white text-lg">Log Presensi SQLite</h3>
+                            <span id="att-total-badge" class="px-2.5 py-0.5 rounded-full text-xs font-bold bg-cyan-500/10 text-cyan-600 dark:text-cyan-400 border border-cyan-500/30">0 Total Log</span>
+                        </div>
+                        <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">Data riwayat tap absensi yang tersimpan permanen di database lokal</p>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <button onclick="App.exportAttendanceCSV()" class="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-200 hover:bg-slate-300 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 text-xs font-bold border border-slate-300 dark:border-slate-700 transition-colors cursor-pointer">
+                            <svg class="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+                            <span>Ekspor JSON/CSV</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Query Filters -->
+                <div class="grid grid-cols-1 sm:grid-cols-4 gap-3 mb-6">
+                    <div>
+                        <label class="block text-[10px] uppercase font-bold text-slate-500 mb-1">Cari User</label>
+                        <input type="text" id="att-search" placeholder="User ID / Nama..." class="w-full px-3 py-2 bg-slate-100 dark:bg-slate-900/80 border border-slate-300 dark:border-slate-800 rounded-xl text-xs text-slate-900 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/50">
+                    </div>
+                    <div>
+                        <label class="block text-[10px] uppercase font-bold text-slate-500 mb-1">Dari Tanggal</label>
+                        <input type="date" id="att-from" class="w-full px-3 py-2 bg-slate-100 dark:bg-slate-900/80 border border-slate-300 dark:border-slate-800 rounded-xl text-xs text-slate-800 dark:text-slate-300 focus:outline-none focus:ring-2 focus:ring-emerald-500/50">
+                    </div>
+                    <div>
+                        <label class="block text-[10px] uppercase font-bold text-slate-500 mb-1">Sampai Tanggal</label>
+                        <input type="date" id="att-to" class="w-full px-3 py-2 bg-slate-100 dark:bg-slate-900/80 border border-slate-300 dark:border-slate-800 rounded-xl text-xs text-slate-800 dark:text-slate-300 focus:outline-none focus:ring-2 focus:ring-emerald-500/50">
+                    </div>
+                    <div class="flex items-end">
+                        <button onclick="App.applyAttendanceFilter()" class="w-full py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl shadow-md shadow-emerald-600/20 transition-all cursor-pointer">
+                            Terapkan Filter
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Attendance Table -->
+                <div class="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800/80">
+                    <table class="w-full text-left text-xs">
+                        <thead class="bg-slate-100 dark:bg-slate-900/80 text-slate-500 dark:text-slate-400 uppercase font-mono border-b border-slate-200 dark:border-slate-800">
+                            <tr>
+                                <th class="py-3.5 px-4">ID</th>
+                                <th class="py-3.5 px-4">User ID</th>
+                                <th class="py-3.5 px-4">Nama Pegawai</th>
+                                <th class="py-3.5 px-4">Waktu Presensi</th>
+                                <th class="py-3.5 px-4">Status</th>
+                                <th class="py-3.5 px-4">Punch Code</th>
+                                <th class="py-3.5 px-4">Sumber Data</th>
+                            </tr>
+                        </thead>
+                        <tbody id="att-table-body">
+                            <!-- Populated dynamically -->
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- Pagination Footer -->
+                <div class="flex items-center justify-between mt-4 pt-4 border-t border-slate-200 dark:border-slate-800/80 text-xs">
+                    <span id="att-page-info" class="text-slate-500 dark:text-slate-400 font-mono">Halaman 1</span>
+                    <div class="flex items-center gap-2">
+                        <button onclick="App.prevAttendancePage()" id="btn-att-prev" class="px-3 py-1.5 rounded-lg bg-slate-200 hover:bg-slate-300 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-300 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer">
+                            ← Sebelumnya
+                        </button>
+                        <button onclick="App.nextAttendancePage()" id="btn-att-next" class="px-3 py-1.5 rounded-lg bg-slate-200 hover:bg-slate-300 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-300 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer">
+                            Selanjutnya →
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ============================================================== -->
+        <!-- TAB 6: HARDWARE & CONTROLS -->
+        <!-- ============================================================== -->
+        <div id="view-hardware" class="hidden space-y-6">
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                
+                <!-- Door Access Control -->
+                <div class="glass-panel p-6 rounded-2xl space-y-4">
+                    <div class="flex items-center gap-2.5 border-b border-slate-200 dark:border-slate-800 pb-3">
+                        <div class="p-2 rounded-lg bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 11V7a4 4 0 118 0m-4 8v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2z"/></svg>
+                        </div>
+                        <div>
+                            <h3 class="font-bold text-slate-900 dark:text-white text-base">Relay Kunci Pintu</h3>
+                            <p class="text-xs text-slate-500 dark:text-slate-400">Buka kunci door access control</p>
+                        </div>
+                    </div>
+                    <div>
+                        <label class="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">Durasi Buka (Detik)</label>
+                        <input type="number" id="ctrl-unlock-sec" value="5" min="1" max="30" class="w-full px-3.5 py-2.5 bg-slate-100 dark:bg-slate-900 border border-slate-300 dark:border-slate-800 rounded-xl text-slate-900 dark:text-slate-100 font-mono text-xs">
+                    </div>
+                    <button onclick="App.triggerUnlock()" class="w-full py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-lg shadow-emerald-600/20 active:scale-95 transition-all cursor-pointer">
+                        🔓 Buka Kunci Pintu Sekarang
+                    </button>
+                </div>
+
+                <!-- Clock RTC Sync -->
+                <div class="glass-panel p-6 rounded-2xl space-y-4">
+                    <div class="flex items-center gap-2.5 border-b border-slate-200 dark:border-slate-800 pb-3">
+                        <div class="p-2 rounded-lg bg-cyan-500/10 text-cyan-600 dark:text-cyan-400">
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                        </div>
+                        <div>
+                            <h3 class="font-bold text-slate-900 dark:text-white text-base">Sinkronisasi Jam RTC</h3>
+                            <p class="text-xs text-slate-500 dark:text-slate-400">Set jam mesin sama dengan komputer</p>
+                        </div>
+                    </div>
+                    <p class="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">Menyamakan jam hardware RTC pada mesin ZKTeco dengan waktu komputer/server saat ini.</p>
+                    <button onclick="App.triggerSyncTime()" class="w-full py-2.5 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white font-bold text-xs shadow-lg shadow-cyan-600/20 active:scale-95 transition-all cursor-pointer">
+                        🕒 Sinkronkan Jam RTC
+                    </button>
+                </div>
+
+                <!-- Voice Audio Prompt Test -->
+                <div class="glass-panel p-6 rounded-2xl space-y-4">
+                    <div class="flex items-center gap-2.5 border-b border-slate-200 dark:border-slate-800 pb-3">
+                        <div class="p-2 rounded-lg bg-amber-500/10 text-amber-600 dark:text-amber-400">
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z"/></svg>
+                        </div>
+                        <div>
+                            <h3 class="font-bold text-slate-900 dark:text-white text-base">Tes Suara Speaker</h3>
+                            <p class="text-xs text-slate-500 dark:text-slate-400">Bunyikan prompt suara internal</p>
+                        </div>
+                    </div>
+                    <div>
+                        <label class="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">Pilih Index Suara</label>
+                        <select id="ctrl-voice-idx" class="w-full px-3 py-2.5 bg-slate-100 dark:bg-slate-900 border border-slate-300 dark:border-slate-800 rounded-xl text-xs text-slate-800 dark:text-slate-200">
+                            <option value="0">Index 0 - "Thank you"</option>
+                            <option value="1">Index 1 - "Incorrect Password"</option>
+                            <option value="2">Index 2 - "Access Denied"</option>
+                            <option value="3">Index 3 - "Duplicated Punch"</option>
+                            <option value="4">Index 4 - "Clock In"</option>
+                        </select>
+                    </div>
+                    <button onclick="App.triggerVoice()" class="w-full py-2.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs shadow-lg shadow-amber-600/20 active:scale-95 transition-all cursor-pointer">
+                        🔊 Putar Suara Mesin
+                    </button>
+                </div>
+
+                <!-- Power Controls -->
+                <div class="glass-panel p-6 rounded-2xl space-y-4 md:col-span-2 lg:col-span-3">
+                    <div class="flex items-center gap-2.5 border-b border-slate-200 dark:border-slate-800 pb-3">
+                        <div class="p-2 rounded-lg bg-rose-500/10 text-rose-600 dark:text-rose-400">
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+                        </div>
+                        <div>
+                            <h3 class="font-bold text-slate-900 dark:text-white text-base">Kontrol Daya Mesin</h3>
+                            <p class="text-xs text-slate-500 dark:text-slate-400">Reboot dan Shutdown perangkat</p>
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <button onclick="App.triggerRestart()" class="py-3 px-4 rounded-xl bg-slate-200 hover:bg-slate-300 dark:bg-slate-800 dark:hover:bg-slate-700 text-amber-600 dark:text-amber-400 font-bold text-xs border border-amber-500/30 transition-all cursor-pointer">
+                            🔄 Reboot / Restart Mesin
+                        </button>
+                        <button onclick="App.triggerPowerOff()" class="py-3 px-4 rounded-xl bg-rose-100 hover:bg-rose-200 dark:bg-rose-950/40 dark:hover:bg-rose-900/60 text-rose-700 dark:text-rose-300 font-bold text-xs border border-rose-300 dark:border-rose-800 transition-all cursor-pointer">
+                            ⏻ Matikan Daya Mesin (Power Off)
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ============================================================== -->
+        <!-- TAB 7: AUDIT HISTORY -->
+        <!-- ============================================================== -->
+        <div id="view-history" class="hidden space-y-6">
+            <div class="glass-panel p-6 rounded-2xl">
+                <div class="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-4 mb-6">
+                    <div>
+                        <h3 class="font-bold text-slate-900 dark:text-white text-lg">Riwayat Audit Sinkronisasi</h3>
+                        <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">Log catatan seluruh proses penarikan data ke SQLite</p>
+                    </div>
+                    <button onclick="App.loadSyncHistory()" class="text-xs font-semibold text-emerald-600 dark:text-emerald-400 hover:text-emerald-500 flex items-center gap-1 cursor-pointer">
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                        <span>Refresh Log</span>
+                    </button>
+                </div>
+                <div class="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800/80">
+                    <table class="w-full text-left text-xs font-mono">
+                        <thead class="bg-slate-100 dark:bg-slate-900/80 text-slate-500 dark:text-slate-400 uppercase border-b border-slate-200 dark:border-slate-800">
+                            <tr>
+                                <th class="py-3 px-4">ID</th>
+                                <th class="py-3 px-4">IP Mesin</th>
+                                <th class="py-3 px-4">Waktu Sinkron</th>
+                                <th class="py-3 px-4">Total di Mesin</th>
+                                <th class="py-3 px-4">Data Baru</th>
+                                <th class="py-3 px-4">Status</th>
+                            </tr>
+                        </thead>
+                        <tbody id="history-table-body">
+                            <!-- Populated dynamically -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- ============================================================== -->
+    <!-- MODAL: DEVICE CONFIGURATION -->
+    <!-- ============================================================== -->
+    <div id="modal-config" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 dark:bg-slate-950/80 backdrop-blur-sm hidden p-4">
+        <div class="glass-panel p-6 rounded-3xl w-full max-w-md border border-slate-300 dark:border-slate-700 shadow-2xl relative">
+            <div class="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-4 mb-4">
+                <div class="flex items-center gap-2.5">
+                    <div class="p-2 rounded-xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+                    </div>
+                    <h3 class="font-bold text-slate-900 dark:text-white text-base">Pengaturan Koneksi Mesin</h3>
+                </div>
+                <button onclick="App.closeConfigModal()" class="p-1 text-slate-400 hover:text-slate-800 dark:hover:text-white cursor-pointer">✕</button>
+            </div>
+
+            <form onsubmit="event.preventDefault(); App.saveConfig();" class="space-y-4 text-xs">
+                <div>
+                    <label class="block font-semibold text-slate-700 dark:text-slate-300 mb-1">Alamat IP Mesin ZKTeco</label>
+                    <input type="text" id="cfg-ip" required class="w-full px-3.5 py-2.5 bg-slate-100 dark:bg-slate-900 border border-slate-300 dark:border-slate-800 rounded-xl text-slate-900 dark:text-slate-100 font-mono focus:ring-emerald-500 focus:outline-none">
+                </div>
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label class="block font-semibold text-slate-700 dark:text-slate-300 mb-1">Port (Default: 4370)</label>
+                        <input type="number" id="cfg-port" required value="4370" class="w-full px-3.5 py-2.5 bg-slate-100 dark:bg-slate-900 border border-slate-300 dark:border-slate-800 rounded-xl text-slate-900 dark:text-slate-100 font-mono focus:ring-emerald-500 focus:outline-none">
+                    </div>
+                    <div>
+                        <label class="block font-semibold text-slate-700 dark:text-slate-300 mb-1">Commkey Password</label>
+                        <input type="number" id="cfg-password" value="0" class="w-full px-3.5 py-2.5 bg-slate-100 dark:bg-slate-900 border border-slate-300 dark:border-slate-800 rounded-xl text-slate-900 dark:text-slate-100 font-mono focus:ring-emerald-500 focus:outline-none">
+                    </div>
+                </div>
+                <div class="space-y-2 pt-2 border-t border-slate-200 dark:border-slate-800">
+                    <label class="flex items-center gap-2.5 text-slate-700 dark:text-slate-300 cursor-pointer">
+                        <input type="checkbox" id="cfg-udp" class="rounded bg-slate-200 dark:bg-slate-800 border-slate-300 dark:border-slate-700 text-emerald-500">
+                        <span>Gunakan Transport UDP (Default: TCP)</span>
+                    </label>
+                    <label class="flex items-center gap-2.5 text-slate-700 dark:text-slate-300 cursor-pointer">
+                        <input type="checkbox" id="cfg-omit-ping" class="rounded bg-slate-200 dark:bg-slate-800 border-slate-300 dark:border-slate-700 text-emerald-500">
+                        <span>Lewati Tes ICMP Ping</span>
+                    </label>
+                    <label class="flex items-center gap-2.5 text-slate-700 dark:text-slate-300 cursor-pointer">
+                        <input type="checkbox" id="cfg-auto-connect" class="rounded bg-slate-200 dark:bg-slate-800 border-slate-300 dark:border-slate-700 text-emerald-500">
+                        <span>Otomatis Terhubung Saat Server Mulai</span>
+                    </label>
+                </div>
+                <div class="flex items-center justify-end gap-2 pt-4">
+                    <button type="button" onclick="App.closeConfigModal()" class="px-4 py-2 rounded-xl bg-slate-200 hover:bg-slate-300 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 font-semibold cursor-pointer">Batal</button>
+                    <button type="submit" class="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold shadow-lg shadow-emerald-600/20 cursor-pointer">Simpan & Hubungkan</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- ============================================================== -->
+    <!-- MODAL: ADD / EDIT USER -->
+    <!-- ============================================================== -->
+    <div id="modal-user" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 dark:bg-slate-950/80 backdrop-blur-sm hidden p-4">
+        <div class="glass-panel p-6 rounded-3xl w-full max-w-md border border-slate-300 dark:border-slate-700 shadow-2xl relative">
+            <div class="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-4 mb-4">
+                <h3 id="user-modal-title" class="font-bold text-slate-900 dark:text-white text-base">Tambah Pengguna Baru</h3>
+                <button onclick="App.closeUserModal()" class="p-1 text-slate-400 hover:text-slate-800 dark:hover:text-white cursor-pointer">✕</button>
+            </div>
+            <form onsubmit="event.preventDefault(); App.saveUser();" class="space-y-4 text-xs">
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label class="block font-semibold text-slate-700 dark:text-slate-300 mb-1">User ID</label>
+                        <input type="text" id="usr-id" required placeholder="misal: 62593" class="w-full px-3.5 py-2.5 bg-slate-100 dark:bg-slate-900 border border-slate-300 dark:border-slate-800 rounded-xl text-slate-900 dark:text-slate-100 font-mono">
+                    </div>
+                    <div>
+                        <label class="block font-semibold text-slate-700 dark:text-slate-300 mb-1">Numeric UID</label>
+                        <input type="number" id="usr-uid" required placeholder="misal: 11" class="w-full px-3.5 py-2.5 bg-slate-100 dark:bg-slate-900 border border-slate-300 dark:border-slate-800 rounded-xl text-slate-900 dark:text-slate-100 font-mono">
+                    </div>
+                </div>
+                <div>
+                    <label class="block font-semibold text-slate-700 dark:text-slate-300 mb-1">Nama Lengkap Pegawai</label>
+                    <input type="text" id="usr-name" required placeholder="Nama lengkap..." class="w-full px-3.5 py-2.5 bg-slate-100 dark:bg-slate-900 border border-slate-300 dark:border-slate-800 rounded-xl text-slate-900 dark:text-slate-100">
+                </div>
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label class="block font-semibold text-slate-700 dark:text-slate-300 mb-1">Hak Akses (Role)</label>
+                        <select id="usr-privilege" class="w-full px-3 py-2.5 bg-slate-100 dark:bg-slate-900 border border-slate-300 dark:border-slate-800 rounded-xl text-slate-800 dark:text-slate-200">
+                            <option value="0">User Biasa</option>
+                            <option value="14">Administrator</option>
+                            <option value="2">Manager</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block font-semibold text-slate-700 dark:text-slate-300 mb-1">Nomor Kartu RFID</label>
+                        <input type="number" id="usr-card" value="0" class="w-full px-3.5 py-2.5 bg-slate-100 dark:bg-slate-900 border border-slate-300 dark:border-slate-800 rounded-xl text-slate-900 dark:text-slate-100 font-mono">
+                    </div>
+                </div>
+                <div class="flex items-center justify-end gap-2 pt-4">
+                    <button type="button" onclick="App.closeUserModal()" class="px-4 py-2 rounded-xl bg-slate-200 hover:bg-slate-300 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 font-semibold cursor-pointer">Batal</button>
+                    <button type="submit" class="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold cursor-pointer">Simpan Pengguna</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- ============================================================== -->
+    <!-- MODAL: USER BIOMETRICS DETAIL -->
+    <!-- ============================================================== -->
+    <div id="modal-biometrics" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 dark:bg-slate-950/80 backdrop-blur-sm hidden p-4">
+        <div class="glass-panel p-6 rounded-3xl w-full max-w-lg border border-slate-300 dark:border-slate-700 shadow-2xl relative">
+            <div class="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-4 mb-4">
+                <div>
+                    <h3 class="font-bold text-slate-900 dark:text-white text-base">Detail Template Sidik Jari</h3>
+                    <p id="bio-user-subtitle" class="text-xs text-emerald-600 dark:text-emerald-400 font-mono">-</p>
+                </div>
+                <button onclick="document.getElementById('modal-biometrics').classList.add('hidden')" class="p-1 text-slate-400 hover:text-slate-800 dark:hover:text-white cursor-pointer">✕</button>
+            </div>
+            <div id="bio-templates-list" class="space-y-3 max-h-96 overflow-y-auto pr-1">
+                <!-- Populated dynamically -->
+            </div>
+        </div>
+    </div>
+
+    <!-- TOAST NOTIFICATION CONTAINER -->
+    <div id="toast-container" class="fixed bottom-5 right-5 z-50 space-y-2 max-w-sm pointer-events-none"></div>
+
+    <script src="/app.js"></script>
+</body>
+</html>

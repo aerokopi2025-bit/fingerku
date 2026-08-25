@@ -540,8 +540,11 @@ func (d *DB) GetAttendanceStats() (AttendanceStats, error) {
 	// Total records
 	_ = d.db.QueryRow("SELECT COUNT(*) FROM attendance_logs").Scan(&stats.TotalRecords)
 
-	// Total unique users
+	// Total unique users in logs
 	_ = d.db.QueryRow("SELECT COUNT(DISTINCT user_id) FROM attendance_logs").Scan(&stats.TotalUsers)
+
+	// Total enrolled users in users table
+	_ = d.db.QueryRow("SELECT COUNT(*) FROM users").Scan(&stats.TotalEnrolledUsers)
 
 	// Today's records & unique users
 	todayPrefix := time.Now().Format("2006-01-02")

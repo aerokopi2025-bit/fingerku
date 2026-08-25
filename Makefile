@@ -1,55 +1,62 @@
-.PHONY: all build dev run serve api test clean help install
+.PHONY: all build build-ui dev dev-ui dev-api serve api test clean help install
 
 # Binary targets and paths
 BIN_DIR := bin
-CLI_BIN := $(BIN_DIR)/fingerku-cli
 API_BIN := $(BIN_DIR)/fingerku-api
 
 all: build
 
 help:
 	@echo "================================================================"
-	@echo "                   🛠️  Fingerku CLI & REST API Tools              "
+	@echo "          🛠️  Fingerku REST API & Vite + Tailwind v4 UI          "
 	@echo "================================================================"
-	@echo "  make dev          Run background service daemon (live listener)"
-	@echo "  make serve        Start REST API server with Chi (port 8080)"
-	@echo "  make build        Build all binaries (fingerku-cli & fingerku-api)"
-	@echo "  make install      Install binaries to \$$GOPATH/bin"
+	@echo "  make dev          Run Backend API & Vite Dev Server concurrently"
+	@echo "  make dev-ui       Start Vite Frontend Dev Server with HMR (port 5173)"
+	@echo "  make dev-api      Start Backend Go API Server (port 8080)"
+	@echo "  make serve        Start production server with embedded UI"
+	@echo "  make build        Build standalone binary (Go + Vite UI)"
+	@echo "  make install      Install binary to \$$GOPATH/bin"
 	@echo "  make test         Execute full test suite"
 	@echo "  make clean        Remove build artifacts & temporary files"
 	@echo "================================================================"
 
-build:
+build-ui:
+	@echo "⚡ Bundling Tailwind CSS v4 & Vite assets..."
+	@cd web && npm run build
+	@echo "✅ UI Assets bundled into api/static/"
+
+build: build-ui
 	@mkdir -p $(BIN_DIR)
-	@echo "🔨 Building fingerku-cli..."
-	@go build -o $(CLI_BIN) ./cmd/fingerku-cli
-	@echo "🔨 Building fingerku-api..."
+	@echo "🔨 Building standalone fingerku-api..."
 	@go build -o $(API_BIN) ./cmd/fingerku-api
-	@echo "✅ Build complete: $(CLI_BIN), $(API_BIN)"
+	@echo "✅ Standalone Build complete: $(API_BIN)"
+
+dev-ui:
+	@echo "⚡ Starting Vite Dev Server with instant HMR (port 5173)..."
+	@cd web && npm run dev
+
+dev-api:
+	@go run ./cmd/fingerku-api --port 8080
 
 dev:
 	@echo "================================================================"
-	@echo "       🚀 Starting Fingerku Runner Daemon (CLI Mode)            "
+	@echo "    🚀 Starting Fingerku Fullstack Developer Environment        "
 	@echo "================================================================"
-	@echo " • Config Source : SQLite DB (fingerku.db)"
-	@echo " • Press Ctrl+C to stop service"
+	@echo " • Backend API  : http://localhost:8080"
+	@echo " • Frontend UI  : http://localhost:5173 (Vite HMR Live Reload)"
+	@echo " • Press Ctrl+C to stop all services"
 	@echo "================================================================"
-	@go run ./cmd/fingerku-cli run
+	@bash -c 'trap "kill 0" SIGINT SIGTERM EXIT; (go run ./cmd/fingerku-api --port 8080) & (cd web && npm run dev) & wait'
 
-serve:
-	@echo "================================================================"
-	@echo "       🚀 Starting Fingerku REST API Server (Powered by Chi)    "
-	@echo "================================================================"
+serve: build-ui
 	@go run ./cmd/fingerku-api --port 8080
 
-api: serve
+api: dev-api
 
-run: dev
-
-install:
-	@echo "📦 Installing fingerku-cli & fingerku-api..."
-	@go install ./cmd/fingerku-cli ./cmd/fingerku-api
-	@echo "✅ Installed to \$$(go env GOPATH)/bin"
+install: build-ui
+	@echo "📦 Installing fingerku-api..."
+	@go install ./cmd/fingerku-api
+	@echo "✅ Installed to \$$(go env GOPATH)/bin/fingerku-api"
 
 test:
 	@echo "🧪 Running unit tests..."

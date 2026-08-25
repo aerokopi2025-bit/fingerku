@@ -1,8 +1,8 @@
 # ==========================================
 # Go Binaries & Build Artifacts
 # ==========================================
-fingerku-cli
-fingerku-web
+fingerku-api
+bin/
 *.exe
 *.exe~
 *.dll

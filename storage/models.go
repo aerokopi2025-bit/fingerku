@@ -32,11 +32,12 @@ type AttendanceFilter struct {
 
 // AttendanceStats aggregates attendance statistics from SQLite.
 type AttendanceStats struct {
-	TotalRecords     int64            `json:"total_records"`
-	TotalUsers       int64            `json:"total_users"`
-	TodayRecords     int64            `json:"today_records"`
-	TodayUniqueUsers int64            `json:"today_unique_users"`
-	StatusCounts     map[string]int64 `json:"status_counts"`
+	TotalRecords       int64            `json:"total_records"`
+	TotalUsers         int64            `json:"total_users"`          // Unique user_ids in attendance_logs
+	TotalEnrolledUsers int64            `json:"total_enrolled_users"` // Users currently enrolled in users table
+	TodayRecords       int64            `json:"today_records"`
+	TodayUniqueUsers   int64            `json:"today_unique_users"`
+	StatusCounts       map[string]int64 `json:"status_counts"`
 }
 
 // SyncRecord represents an audit log entry for database synchronization from a device.
