@@ -83,6 +83,32 @@ func TestSQLiteStorage(t *testing.T) {
 		t.Errorf("Expected 2 total users in stats, got %d", stats.TotalUsers)
 	}
 
+	// Test Templates
+	tmps := []zk.Finger{
+		{UID: 1, FID: 6, Valid: 1, Size: 500, Template: []byte("TEST_TEMPLATE_1_6")},
+		{UID: 1, FID: 7, Valid: 1, Size: 520, Template: []byte("TEST_TEMPLATE_1_7")},
+		{UID: 2, FID: 6, Valid: 1, Size: 480, Template: []byte("TEST_TEMPLATE_2_6")},
+	}
+	savedTmps, err := db.SaveTemplatesBatch(tmps, map[int]string{1: "1001", 2: "1002"})
+	if err != nil {
+		t.Fatalf("Failed to save templates: %v", err)
+	}
+	if savedTmps != 3 {
+		t.Errorf("Expected 3 saved templates, got %d", savedTmps)
+	}
+	loadedTmps, err := db.GetTemplates()
+	if err != nil || len(loadedTmps) != 3 {
+		t.Errorf("Expected 3 loaded templates, got %d (err: %v)", len(loadedTmps), err)
+	}
+	u1Tmps, err := db.GetUserTemplates(1)
+	if err != nil || len(u1Tmps) != 2 {
+		t.Errorf("Expected 2 templates for user 1, got %d (err: %v)", len(u1Tmps), err)
+	}
+	fCountMap, err := db.GetUserFingerCountMap()
+	if err != nil || fCountMap[1] != 2 || fCountMap[2] != 1 {
+		t.Errorf("Expected finger counts {1:2, 2:1}, got %+v", fCountMap)
+	}
+
 	// Test Default DeviceConfig
 	cfg, err := db.GetDeviceConfig()
 	if err != nil {

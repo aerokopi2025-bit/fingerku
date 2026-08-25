@@ -101,13 +101,17 @@ func main() {
 		runAttendance(client)
 	case "templates":
 		client := createClient(effectiveCfg, *verbose)
-		runTemplates(client)
+		runTemplates(client, db)
 	case "live":
 		client := createClient(effectiveCfg, *verbose)
 		runLive(client, db, effectiveCfg)
 	case "sync-logs", "pull-logs":
 		client := createClient(effectiveCfg, *verbose)
 		runSyncLogs(client, db, effectiveCfg, *dbPath)
+	case "db-users":
+		runDBUsers(db, *dbPath)
+	case "db-templates":
+		runDBTemplates(db, *dbPath)
 	case "db-logs":
 		runDBLogs(db, *dbPath, *userFilter, *fromFilter, *toFilter, *statusFilter, *limitFilter)
 	case "db-stats":
@@ -141,23 +145,25 @@ func printUsage() {
 	fmt.Println("\nUsage:")
 	fmt.Println("  fingerku-cli <command> [flags]")
 	fmt.Println("\nCore & Database Commands:")
-	fmt.Println("  run         Run background listener & auto-sync service using DB configuration")
-	fmt.Println("  config      Display device configuration saved in SQLite database")
-	fmt.Println("  set-config  Update and save default device configuration in SQLite database")
-	fmt.Println("  sync-logs   Fetch attendance logs from machine & save to SQLite database")
-	fmt.Println("  db-logs     Query and display attendance logs stored in SQLite database")
-	fmt.Println("  db-stats    Display statistical summary from SQLite database")
+	fmt.Println("  run          Run background listener & auto-sync service using DB configuration")
+	fmt.Println("  config       Display device configuration saved in SQLite database")
+	fmt.Println("  set-config   Update and save default device configuration in SQLite database")
+	fmt.Println("  sync-logs    Fetch attendance logs & biometric data from machine & save to SQLite")
+	fmt.Println("  db-users     Query and display enrolled users stored in SQLite database")
+	fmt.Println("  db-templates Query and display biometric fingerprint templates stored in SQLite")
+	fmt.Println("  db-logs      Query and display attendance logs stored in SQLite database")
+	fmt.Println("  db-stats     Display statistical summary from SQLite database")
 	fmt.Println("\nDevice & Hardware Commands:")
-	fmt.Println("  info        Show device hardware, firmware, network and memory capacity")
-	fmt.Println("  users       List all enrolled users (and cache to SQLite)")
-	fmt.Println("  attendance  Fetch attendance records directly from machine RAM (Read-Only)")
-	fmt.Println("  templates   List fingerprint biometric templates")
-	fmt.Println("  live        Monitor punch events in real-time and save to SQLite")
-	fmt.Println("  unlock      Trigger door access relay (--seconds 3)")
-	fmt.Println("  synctime    Synchronize machine time with server RTC")
-	fmt.Println("  voice       Play speaker voice prompt (--index 0)")
-	fmt.Println("  restart     Reboot device")
-	fmt.Println("  poweroff    Shutdown device")
+	fmt.Println("  info         Show device hardware, firmware, network and memory capacity")
+	fmt.Println("  users        List all enrolled users & finger templates (and cache to SQLite)")
+	fmt.Println("  attendance   Fetch attendance records directly from machine RAM (Read-Only)")
+	fmt.Println("  templates    List fingerprint biometric templates (and cache to SQLite)")
+	fmt.Println("  live         Monitor punch events in real-time and save to SQLite")
+	fmt.Println("  unlock       Trigger door access relay (--seconds 3)")
+	fmt.Println("  synctime     Synchronize machine time with server RTC")
+	fmt.Println("  voice        Play speaker voice prompt (--index 0)")
+	fmt.Println("  restart      Reboot device")
+	fmt.Println("  poweroff     Shutdown device")
 	fmt.Println("\nGlobal Flags:")
 	fmt.Println("  --db                 SQLite database file path (default: fingerku.db)")
 	fmt.Println("  --ip                 Device IP address (overrides DB config)")
@@ -273,6 +279,7 @@ func runRunner(db *storage.DB, cfg storage.DeviceConfig, dbPath string, verbose 
 
 func syncUsersAndLogs(client *zk.Client, db *storage.DB, deviceIP string, dbPath string) map[string]string {
 	userMap := make(map[string]string)
+	uidToUserID := make(map[int]string)
 
 	_ = client.DisableDevice()
 	defer client.EnableDevice()
@@ -283,8 +290,18 @@ func syncUsersAndLogs(client *zk.Client, db *storage.DB, deviceIP string, dbPath
 		_ = db.SaveUsersBatch(users)
 		for _, u := range users {
 			userMap[u.UserID] = u.Name
+			uidToUserID[int(u.UID)] = u.UserID
 		}
 		fmt.Printf("OK (%d users saved to DB)\n", len(users))
+	} else {
+		fmt.Printf("Warning: %v\n", err)
+	}
+
+	fmt.Print(" -> Fetching biometric finger templates... ")
+	templates, err := client.GetTemplates()
+	if err == nil {
+		savedTmps, _ := db.SaveTemplatesBatch(templates, uidToUserID)
+		fmt.Printf("OK (%d templates saved to DB)\n", savedTmps)
 	} else {
 		fmt.Printf("Warning: %v\n", err)
 	}
@@ -469,16 +486,38 @@ func runUsers(client *zk.Client, db *storage.DB) {
 
 	_ = db.SaveUsersBatch(users)
 
-	fmt.Printf("\nTotal Enrolled Users: %d (Cached to SQLite)\n", len(users))
-	fmt.Printf("%-6s | %-12s | %-20s | %-14s | %-10s | %-10s\n", "UID", "User ID", "Name", "Privilege", "Password", "Card")
-	fmt.Println("-----------------------------------------------------------------------------------------")
+	uidToUserID := make(map[int]string)
+	for _, u := range users {
+		uidToUserID[int(u.UID)] = u.UserID
+	}
+
+	// Fetch and cache biometric fingerprint templates
+	templates, _ := client.GetTemplates()
+	if len(templates) > 0 {
+		_, _ = db.SaveTemplatesBatch(templates, uidToUserID)
+	}
+
+	fingerCountMap := make(map[int]int)
+	for _, t := range templates {
+		fingerCountMap[t.UID]++
+	}
+
+	fmt.Printf("\nTotal Enrolled Users: %d (Cached with Fingerprints to SQLite)\n", len(users))
+	fmt.Printf("%-6s | %-12s | %-24s | %-12s | %-10s | %-10s | %-10s\n",
+		"UID", "User ID", "Name", "Fingers", "Privilege", "Password", "Card")
+	fmt.Println("---------------------------------------------------------------------------------------------------------")
 	for _, u := range users {
 		pwd := u.Password
 		if pwd == "" {
 			pwd = "-"
 		}
-		fmt.Printf("%-6d | %-12s | %-20s | %-14s | %-10s | %-10d\n",
-			u.UID, u.UserID, u.Name, u.PrivilegeName(), pwd, u.Card)
+		fCount := fingerCountMap[int(u.UID)]
+		fStr := fmt.Sprintf("%d finger(s)", fCount)
+		if fCount == 0 {
+			fStr = "-"
+		}
+		fmt.Printf("%-6d | %-12s | %-24s | %-12s | %-10s | %-10s | %-10d\n",
+			u.UID, u.UserID, u.Name, fStr, u.PrivilegeName(), pwd, u.Card)
 	}
 }
 
@@ -504,7 +543,7 @@ func runAttendance(client *zk.Client) {
 	}
 }
 
-func runTemplates(client *zk.Client) {
+func runTemplates(client *zk.Client, db *storage.DB) {
 	connect(client)
 	defer client.Disconnect()
 
@@ -517,7 +556,59 @@ func runTemplates(client *zk.Client) {
 		return
 	}
 
-	fmt.Printf("\nTotal Biometric Templates: %d\n", len(templates))
+	if db != nil {
+		users, _ := db.GetUsers()
+		uidToUserID := make(map[int]string)
+		for _, u := range users {
+			uidToUserID[int(u.UID)] = u.UserID
+		}
+		_, _ = db.SaveTemplatesBatch(templates, uidToUserID)
+	}
+
+	fmt.Printf("\nTotal Biometric Templates: %d (Cached to SQLite)\n", len(templates))
+	fmt.Printf("%-6s | %-4s | %-6s | %-6s | %-24s\n", "UID", "FID", "Valid", "Size", "Template Hex Sample")
+	fmt.Println("------------------------------------------------------------------")
+	for _, t := range templates {
+		fmt.Printf("%-6d | %-4d | %-6d | %-6d | %-24s\n",
+			t.UID, t.FID, t.Valid, t.Size, t.Mark())
+	}
+}
+
+func runDBUsers(db *storage.DB, dbPath string) {
+	users, err := db.GetUsers()
+	if err != nil {
+		fmt.Printf("Error retrieving users from DB: %v\n", err)
+		return
+	}
+	fCountMap, _ := db.GetUserFingerCountMap()
+
+	fmt.Printf("\n=== SQLite Enrolled Users (%s) - Total: %d ===\n", dbPath, len(users))
+	fmt.Printf("%-6s | %-12s | %-24s | %-12s | %-10s | %-10s | %-10s\n",
+		"UID", "User ID", "Name", "Fingers", "Privilege", "Password", "Card")
+	fmt.Println("---------------------------------------------------------------------------------------------------------")
+	for _, u := range users {
+		pwd := u.Password
+		if pwd == "" {
+			pwd = "-"
+		}
+		fCount := fCountMap[int(u.UID)]
+		fStr := fmt.Sprintf("%d finger(s)", fCount)
+		if fCount == 0 {
+			fStr = "-"
+		}
+		fmt.Printf("%-6d | %-12s | %-24s | %-12s | %-10s | %-10s | %-10d\n",
+			u.UID, u.UserID, u.Name, fStr, u.PrivilegeName(), pwd, u.Card)
+	}
+}
+
+func runDBTemplates(db *storage.DB, dbPath string) {
+	templates, err := db.GetTemplates()
+	if err != nil {
+		fmt.Printf("Error retrieving templates from DB: %v\n", err)
+		return
+	}
+
+	fmt.Printf("\n=== SQLite Biometric Fingerprint Templates (%s) - Total: %d ===\n", dbPath, len(templates))
 	fmt.Printf("%-6s | %-4s | %-6s | %-6s | %-24s\n", "UID", "FID", "Valid", "Size", "Template Hex Sample")
 	fmt.Println("------------------------------------------------------------------")
 	for _, t := range templates {

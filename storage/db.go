@@ -75,6 +75,20 @@ func (d *DB) initSchema() error {
 			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_users_uid ON users(uid);`,
+		`CREATE TABLE IF NOT EXISTS finger_templates (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			uid INTEGER NOT NULL,
+			user_id TEXT,
+			fid INTEGER NOT NULL,
+			valid INTEGER DEFAULT 1,
+			size INTEGER NOT NULL,
+			template BLOB NOT NULL,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE(uid, fid)
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_fingers_uid ON finger_templates(uid);`,
+		`CREATE INDEX IF NOT EXISTS idx_fingers_user_id ON finger_templates(user_id);`,
 		`CREATE TABLE IF NOT EXISTS sync_history (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			device_ip TEXT NOT NULL,
@@ -273,6 +287,137 @@ func (d *DB) GetUsers() ([]zk.User, error) {
 	}
 
 	return users, rows.Err()
+}
+
+// SaveTemplatesBatch saves fingerprint templates into the SQLite database.
+func (d *DB) SaveTemplatesBatch(templates []zk.Finger, uidToUserID map[int]string) (int, error) {
+	if len(templates) == 0 {
+		return 0, nil
+	}
+
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	tx, err := d.db.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	stmt, err := tx.Prepare(`
+		INSERT INTO finger_templates (uid, user_id, fid, valid, size, template, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+		ON CONFLICT(uid, fid) DO UPDATE SET
+			user_id = excluded.user_id,
+			valid = excluded.valid,
+			size = excluded.size,
+			template = excluded.template,
+			updated_at = CURRENT_TIMESTAMP
+	`)
+	if err != nil {
+		return 0, err
+	}
+	defer stmt.Close()
+
+	savedCount := 0
+	for _, t := range templates {
+		userID := ""
+		if uidToUserID != nil {
+			userID = uidToUserID[t.UID]
+		}
+		if _, err := stmt.Exec(t.UID, userID, t.FID, t.Valid, t.Size, t.Template); err != nil {
+			return savedCount, err
+		}
+		savedCount++
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+
+	return savedCount, nil
+}
+
+// GetTemplates retrieves all stored fingerprint biometric templates from SQLite database.
+func (d *DB) GetTemplates() ([]zk.Finger, error) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+
+	rows, err := d.db.Query(`
+		SELECT uid, fid, valid, size, template
+		FROM finger_templates
+		ORDER BY uid ASC, fid ASC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var list []zk.Finger
+	for rows.Next() {
+		var f zk.Finger
+		if err := rows.Scan(&f.UID, &f.FID, &f.Valid, &f.Size, &f.Template); err != nil {
+			return nil, err
+		}
+		list = append(list, f)
+	}
+
+	return list, rows.Err()
+}
+
+// GetUserTemplates retrieves templates registered to a specific user by UID.
+func (d *DB) GetUserTemplates(uid int) ([]zk.Finger, error) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+
+	rows, err := d.db.Query(`
+		SELECT uid, fid, valid, size, template
+		FROM finger_templates
+		WHERE uid = ?
+		ORDER BY fid ASC
+	`, uid)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var list []zk.Finger
+	for rows.Next() {
+		var f zk.Finger
+		if err := rows.Scan(&f.UID, &f.FID, &f.Valid, &f.Size, &f.Template); err != nil {
+			return nil, err
+		}
+		list = append(list, f)
+	}
+
+	return list, rows.Err()
+}
+
+// GetUserFingerCountMap returns a map of UID -> enrolled fingers count from SQLite.
+func (d *DB) GetUserFingerCountMap() (map[int]int, error) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+
+	rows, err := d.db.Query(`
+		SELECT uid, COUNT(*) as count
+		FROM finger_templates
+		GROUP BY uid
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	counts := make(map[int]int)
+	for rows.Next() {
+		var uid, count int
+		if err := rows.Scan(&uid, &count); err != nil {
+			return nil, err
+		}
+		counts[uid] = count
+	}
+
+	return counts, rows.Err()
 }
 
 // GetAttendance retrieves stored attendance logs based on filter criteria with pagination.

@@ -94,8 +94,14 @@ Secara default, seluruh perintah CLI menggunakan konfigurasi target mesin yang t
 
 ### 2. Sinkronisasi & Query Database SQLite
 ```bash
-# Tarik seluruh log absensi & user dari mesin dan simpan ke SQLite (dengan deduplikasi)
+# Tarik seluruh user, template sidik jari biometrik & log absensi dari mesin dan simpan ke SQLite
 ./bin/fingerku-cli sync-logs
+
+# Tampilkan daftar pengguna yang tersimpan di SQLite (beserta jumlah sidik jari)
+./bin/fingerku-cli db-users
+
+# Tampilkan template sidik jari biometrik yang tersimpan di SQLite
+./bin/fingerku-cli db-templates
 
 # Tampilkan log absensi yang tersimpan di SQLite
 ./bin/fingerku-cli db-logs --limit 50
@@ -112,8 +118,11 @@ Secara default, seluruh perintah CLI menggunakan konfigurasi target mesin yang t
 # Menampilkan informasi perangkat, firmware, jaringan & kapasitas memori
 ./bin/fingerku-cli info
 
-# Mengambil daftar pengguna yang terdaftar dari mesin (dan cache ke SQLite)
+# Mengambil daftar pengguna & template sidik jari dari mesin (dan cache ke SQLite)
 ./bin/fingerku-cli users
+
+# Mengambil template sidik jari biometrik dari mesin (dan cache ke SQLite)
+./bin/fingerku-cli templates
 
 # Mengambil seluruh log absensi langsung dari RAM mesin (Read-Only)
 ./bin/fingerku-cli attendance
