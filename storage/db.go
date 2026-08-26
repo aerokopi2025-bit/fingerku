@@ -525,6 +525,9 @@ func (d *DB) GetAttendance(filter AttendanceFilter) ([]AttendanceRecord, int64, 
 
 		records = append(records, r)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
 
 	return records, total, nil
 }
@@ -556,11 +559,18 @@ func (d *DB) GetAttendanceStats() (AttendanceStats, error) {
 	if err == nil {
 		defer rows.Close()
 		for rows.Next() {
-			var name string
+			var name sql.NullString
 			var count int64
 			if err := rows.Scan(&name, &count); err == nil {
-				stats.StatusCounts[name] = count
+				key := name.String
+				if !name.Valid || key == "" {
+					key = "Unknown"
+				}
+				stats.StatusCounts[key] = count
 			}
+		}
+		if err := rows.Err(); err != nil {
+			return stats, err
 		}
 	}
 

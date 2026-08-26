@@ -44,11 +44,11 @@ func main() {
 
 	addr := fmt.Sprintf("%s:%d", *host, *port)
 	httpServer := &http.Server{
-		Addr:         addr,
-		Handler:      srv.Routes(),
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 60 * time.Second,
-		IdleTimeout:  120 * time.Second,
+		Addr:        addr,
+		Handler:     srv.Routes(),
+		ReadTimeout: 30 * time.Second,
+		// WriteTimeout must be 0 for SSE (hijacked long-lived streams)
+		IdleTimeout: 120 * time.Second,
 	}
 
 	// Graceful shutdown listener

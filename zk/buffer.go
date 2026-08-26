@@ -13,6 +13,8 @@ import (
 func (c *Client) ReadWithBuffer(command uint16, fct uint16, ext uint32) ([]byte, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.connMu.Lock()
+	defer c.connMu.Unlock()
 
 	var maxChunk int
 	if c.tcp {
@@ -28,7 +30,7 @@ func (c *Client) ReadWithBuffer(command uint16, fct uint16, ext uint32) ([]byte,
 	_ = binary.Write(cmdBuf, binary.LittleEndian, int32(fct))
 	_ = binary.Write(cmdBuf, binary.LittleEndian, int32(ext))
 
-	respCode, data, err := c.rawSendCommand(CmdPrepareBuffer, cmdBuf.Bytes(), 1024)
+	respCode, data, err := c.rawSendCommandLocked(CmdPrepareBuffer, cmdBuf.Bytes(), 1024)
 	if err != nil {
 		return nil, err
 	}
@@ -57,7 +59,7 @@ func (c *Client) ReadWithBuffer(command uint16, fct uint16, ext uint32) ([]byte,
 	remain := totalSize % maxChunk
 
 	for i := 0; i < packets; i++ {
-		chunk, err := c.rawReadChunk(start, maxChunk)
+		chunk, err := c.rawReadChunkLocked(start, maxChunk)
 		if err != nil {
 			return nil, err
 		}
@@ -66,7 +68,7 @@ func (c *Client) ReadWithBuffer(command uint16, fct uint16, ext uint32) ([]byte,
 	}
 
 	if remain > 0 {
-		chunk, err := c.rawReadChunk(start, remain)
+		chunk, err := c.rawReadChunkLocked(start, remain)
 		if err != nil {
 			return nil, err
 		}
@@ -75,20 +77,29 @@ func (c *Client) ReadWithBuffer(command uint16, fct uint16, ext uint32) ([]byte,
 	}
 
 	// Free buffer on device
-	_, _, _ = c.rawSendCommand(CmdFreeData, nil, 8)
+	_, _, _ = c.rawSendCommandLocked(CmdFreeData, nil, 8)
 
 	return result, nil
 }
 
 // rawReadChunk fetches a specific chunk slice from the device buffer.
+// Caller must hold mu+connMu.
 func (c *Client) rawReadChunk(start int, size int) ([]byte, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.connMu.Lock()
+	defer c.connMu.Unlock()
+	return c.rawReadChunkLocked(start, size)
+}
+
+func (c *Client) rawReadChunkLocked(start int, size int) ([]byte, error) {
 	cmdBuf := new(bytes.Buffer)
 	_ = binary.Write(cmdBuf, binary.LittleEndian, int32(start))
 	_ = binary.Write(cmdBuf, binary.LittleEndian, int32(size))
 
 	var lastErr error
 	for retries := 0; retries < 3; retries++ {
-		respCode, data, err := c.rawSendCommand(CmdReadBuffer, cmdBuf.Bytes(), size+32)
+		respCode, data, err := c.rawSendCommandLocked(CmdReadBuffer, cmdBuf.Bytes(), size+32)
 		if err != nil {
 			lastErr = err
 			time.Sleep(100 * time.Millisecond)
@@ -100,7 +111,7 @@ func (c *Client) rawReadChunk(start int, size int) ([]byte, error) {
 		}
 
 		if respCode == CmdPrepareData {
-			chunkData, err := c.rawReceivePrepareData(data, size)
+			chunkData, err := c.rawReceivePrepareDataLocked(data, size)
 			if err == nil && len(chunkData) > 0 {
 				return chunkData, nil
 			}
@@ -112,7 +123,16 @@ func (c *Client) rawReadChunk(start int, size int) ([]byte, error) {
 }
 
 // rawReceivePrepareData handles reading when CMD_PREPARE_DATA is returned.
+// Caller must hold mu+connMu.
 func (c *Client) rawReceivePrepareData(initialData []byte, expectedSize int) ([]byte, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.connMu.Lock()
+	defer c.connMu.Unlock()
+	return c.rawReceivePrepareDataLocked(initialData, expectedSize)
+}
+
+func (c *Client) rawReceivePrepareDataLocked(initialData []byte, expectedSize int) ([]byte, error) {
 	if c.tcp {
 		// Read 8-byte TCP top header of CMD_DATA packet
 		topHeader := make([]byte, 8)
@@ -190,17 +210,19 @@ func (c *Client) rawReceivePrepareData(initialData []byte, expectedSize int) ([]
 func (c *Client) SendWithBuffer(buffer []byte) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.connMu.Lock()
+	defer c.connMu.Unlock()
 
 	const maxChunk = 1024
 	size := len(buffer)
 
 	// Free data on device first
-	_, _, _ = c.rawSendCommand(CmdFreeData, nil, 8)
+	_, _, _ = c.rawSendCommandLocked(CmdFreeData, nil, 8)
 
 	// Prepare data command
 	prepBuf := make([]byte, 4)
 	binary.LittleEndian.PutUint32(prepBuf, uint32(size))
-	respCode, _, err := c.rawSendCommand(CmdPrepareData, prepBuf, 8)
+	respCode, _, err := c.rawSendCommandLocked(CmdPrepareData, prepBuf, 8)
 	if err != nil {
 		return err
 	}
@@ -214,7 +236,7 @@ func (c *Client) SendWithBuffer(buffer []byte) error {
 
 	for i := 0; i < packets; i++ {
 		chunk := buffer[start : start+maxChunk]
-		respCode, _, err := c.rawSendCommand(CmdData, chunk, 8)
+		respCode, _, err := c.rawSendCommandLocked(CmdData, chunk, 8)
 		if err != nil {
 			return err
 		}
@@ -226,7 +248,7 @@ func (c *Client) SendWithBuffer(buffer []byte) error {
 
 	if remain > 0 {
 		chunk := buffer[start : start+remain]
-		respCode, _, err := c.rawSendCommand(CmdData, chunk, 8)
+		respCode, _, err := c.rawSendCommandLocked(CmdData, chunk, 8)
 		if err != nil {
 			return err
 		}

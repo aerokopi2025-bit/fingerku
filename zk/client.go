@@ -6,15 +6,14 @@ import (
 	"io"
 	"log"
 	"net"
-	"os/exec"
-	"runtime"
 	"sync"
 	"time"
 )
 
 // Client represents an active or configured connection to a ZKTeco machine.
 type Client struct {
-	mu        sync.Mutex
+	mu        sync.Mutex // protects sessionID, replyID, isConnect, tcp, userPacketSize, nextUID, Sizes
+	connMu    sync.Mutex // serializes all conn Read/Write + SetDeadline; LiveCapture and sendCommand share it
 	ip        string
 	port      int
 	timeout   time.Duration
@@ -84,17 +83,8 @@ func WithVerbose(verbose bool) Option {
 // New creates a new ZKTeco client instance with default options.
 func New(ip string, opts ...Option) *Client {
 	c := &Client{
-		ip:             ip,
-		port:           4370,
-		timeout:        10 * time.Second,
-		password:       0,
-		forceUDP:       false,
-		omitPing:       false,
-		verbose:        false,
-		userPacketSize: 72, // default ZK8
-		nextUID:        1,
-		nextUserID:     "1",
-		replyID:        USHRT_MAX - 1,
+		ip: ip, port: 4370, timeout: 10 * time.Second, password: 0, forceUDP: false, omitPing: false, verbose: false, userPacketSize: 72, // default ZK8
+		nextUID: 1, nextUserID: "1", replyID: USHRT_MAX - 1,
 	}
 
 	for _, opt := range opts {
@@ -105,20 +95,17 @@ func New(ip string, opts ...Option) *Client {
 	return c
 }
 
-// Ping checks if the device is reachable via system ICMP ping.
+// Ping checks if the device is reachable via TCP dial (port probe).
+// Replaces the previous exec-based ICMP ping to avoid forking and to work
+// in restricted environments. Returns true if the TCP port accepts a connection.
 func (c *Client) Ping() bool {
-	var cmd *exec.Cmd
-	if runtime.GOOS == "windows" {
-		cmd = exec.Command("ping", "-n", "1", "-w", "2000", c.ip)
-	} else {
-		cmd = exec.Command("ping", "-c", "1", "-W", "2", c.ip)
-	}
-	return cmd.Run() == nil
+	return c.TestTCP()
 }
 
-// TestTCP tests if the TCP port is open and responsive.
+// TestTCP tests if the TCP port is open and responsive via net.JoinHostPort
+// (IPv6-safe).
 func (c *Client) TestTCP() bool {
-	addr := fmt.Sprintf("%s:%d", c.ip, c.port)
+	addr := net.JoinHostPort(c.ip, fmt.Sprintf("%d", c.port))
 	conn, err := net.DialTimeout("tcp", addr, 3*time.Second)
 	if err != nil {
 		return false
@@ -128,38 +115,61 @@ func (c *Client) TestTCP() bool {
 }
 
 // Connect establishes connection and authenticates with the machine.
+// Network probes (Ping/TestTCP) are done outside the mutex to avoid blocking
+// other callers for 6-14s. Only state mutation is held under lock.
 func (c *Client) Connect() error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if !c.omitPing && !c.Ping() {
-		return fmt.Errorf("%w: ping to %s failed", ErrDeviceUnreachable, c.ip)
+	// Single probe outside lock — no double TestTCP.
+	if !c.omitPing && !c.forceUDP {
+		if !c.TestTCP() {
+			return fmt.Errorf("%w: ping to %s failed", ErrDeviceUnreachable, c.ip)
+		}
 	}
 
-	addr := fmt.Sprintf("%s:%d", c.ip, c.port)
+	addr := net.JoinHostPort(c.ip, fmt.Sprintf("%d", c.port))
 
-	if !c.forceUDP && c.TestTCP() {
-		c.tcp = true
-		c.userPacketSize = 72
-		conn, err := net.DialTimeout("tcp", addr, c.timeout)
-		if err != nil {
+	var (
+		conn   net.Conn
+		useTCP bool
+		err    error
+	)
+	if !c.forceUDP {
+		// Try TCP once; on failure fall back to UDP instead of probing twice.
+		conn, err = net.DialTimeout("tcp", addr, c.timeout)
+		if err == nil {
+			useTCP = true
+		} else if c.omitPing {
+			conn, err = net.DialTimeout("udp", addr, c.timeout)
+			if err != nil {
+				return &NetworkError{Op: "dial udp", Err: err}
+			}
+			useTCP = false
+		} else {
 			return &NetworkError{Op: "dial tcp", Err: err}
 		}
-		c.conn = conn
 	} else {
-		c.tcp = false
-		conn, err := net.DialTimeout("udp", addr, c.timeout)
+		conn, err = net.DialTimeout("udp", addr, c.timeout)
 		if err != nil {
 			return &NetworkError{Op: "dial udp", Err: err}
 		}
-		c.conn = conn
+		useTCP = false
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.connMu.Lock()
+	defer c.connMu.Unlock()
+
+	c.conn = conn
+	c.tcp = useTCP
+	if useTCP {
+		c.userPacketSize = 72
 	}
 
 	c.sessionID = 0
 	c.replyID = USHRT_MAX - 1
 
 	// Send Connect command
-	respCode, data, err := c.rawSendCommand(CmdConnect, nil, 8)
+	respCode, data, err := c.rawSendCommandLocked(CmdConnect, nil, 8)
 	if err != nil {
 		_ = c.conn.Close()
 		return err
@@ -170,7 +180,7 @@ func (c *Client) Connect() error {
 			log.Printf("[zk] Auth required, sending commkey for password=%d, sessionID=%d", c.password, c.sessionID)
 		}
 		commKey := MakeCommKey(c.password, c.sessionID, 50)
-		respCode, data, err = c.rawSendCommand(CmdAuth, commKey, 8)
+		respCode, data, err = c.rawSendCommandLocked(CmdAuth, commKey, 8)
 		if err != nil {
 			_ = c.conn.Close()
 			return err
@@ -193,12 +203,14 @@ func (c *Client) Connect() error {
 func (c *Client) Disconnect() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.connMu.Lock()
+	defer c.connMu.Unlock()
 
 	if !c.isConnect || c.conn == nil {
 		return nil
 	}
 
-	_, _, _ = c.rawSendCommand(CmdExit, nil, 8)
+	_, _, _ = c.rawSendCommandLocked(CmdExit, nil, 8)
 	err := c.conn.Close()
 	c.isConnect = false
 	c.conn = nil
@@ -219,8 +231,14 @@ func (c *Client) transportName() string {
 	return "UDP"
 }
 
-// rawSendCommand transmits a command and receives a response without acquiring c.mu lock.
+// rawSendCommand transmits a command and receives a response without acquiring locks.
+// Caller must hold both c.mu and c.connMu.
 func (c *Client) rawSendCommand(cmd uint16, cmdString []byte, expectedRespSize int) (uint16, []byte, error) {
+	return c.rawSendCommandLocked(cmd, cmdString, expectedRespSize)
+}
+
+// rawSendCommandLocked is the inner implementation; caller must hold mu+connMu.
+func (c *Client) rawSendCommandLocked(cmd uint16, cmdString []byte, expectedRespSize int) (uint16, []byte, error) {
 	if cmd != CmdConnect && cmd != CmdAuth && !c.isConnect {
 		return 0, nil, ErrNotConnected
 	}
@@ -297,18 +315,31 @@ func (c *Client) rawSendCommand(cmd uint16, cmdString []byte, expectedRespSize i
 	return respCode, data, nil
 }
 
-// sendCommand transmits a command with thread safety.
+// sendCommand transmits a command with thread safety (both mu + connMu).
 func (c *Client) sendCommand(cmd uint16, cmdString []byte, expectedRespSize int) (uint16, []byte, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.rawSendCommand(cmd, cmdString, expectedRespSize)
+	c.connMu.Lock()
+	defer c.connMu.Unlock()
+	return c.rawSendCommandLocked(cmd, cmdString, expectedRespSize)
 }
 
-// ackOK sends an ACK_OK acknowledgment packet.
+// ackOK sends an ACK_OK acknowledgment packet in a thread-safe manner.
 func (c *Client) ackOK() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.connMu.Lock()
+	defer c.connMu.Unlock()
+	return c.ackOKLocked()
+}
+
+// ackOKLocked is the internal version that assumes mu+connMu are already held.
+func (c *Client) ackOKLocked() error {
+	if c.conn == nil {
+		return ErrNotConnected
+	}
 	buf, _ := CreateHeader(CmdAckOk, nil, c.sessionID, USHRT_MAX-1)
 	_ = c.conn.SetDeadline(time.Now().Add(c.timeout))
-
 	if c.tcp {
 		top := CreateTCPTop(buf)
 		_, err := c.conn.Write(top)
@@ -316,4 +347,16 @@ func (c *Client) ackOK() error {
 	}
 	_, err := c.conn.Write(buf)
 	return err
+}
+
+// ClearAttendance removes all attendance logs from device RAM.
+func (c *Client) ClearAttendance() error {
+	respCode, _, err := c.sendCommand(CmdClearAttLog, nil, 8)
+	if err != nil {
+		return err
+	}
+	if respCode != CmdAckOk {
+		return NewResponseError("cannot clear attendance logs", respCode)
+	}
+	return c.RefreshData()
 }

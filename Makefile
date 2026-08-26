@@ -40,13 +40,13 @@ dev-api:
 
 dev:
 	@echo "================================================================"
-	@echo "    🚀 Starting Fingerku Fullstack Developer Environment        "
+	@echo " 🚀 Starting Fingerku Fullstack Developer Environment "
 	@echo "================================================================"
-	@echo " • Backend API  : http://localhost:8080"
-	@echo " • Frontend UI  : http://localhost:5173 (Vite HMR Live Reload)"
+	@echo " • Backend API : http://localhost:8080"
+	@echo " • Frontend UI : http://localhost:5173 (Vite HMR Live Reload)"
 	@echo " • Press Ctrl+C to stop all services"
 	@echo "================================================================"
-	@bash -c 'trap "kill 0" SIGINT SIGTERM EXIT; (go run ./cmd/fingerku-api --port 8080) & (cd web && npm run dev) & wait'
+	@bash -c 'set -m; trap "kill -- -$$ 2>/dev/null; wait" SIGINT SIGTERM EXIT; (go run ./cmd/fingerku-api --port 8080) & pid1=$$!; (cd web && npm run dev) & pid2=$$!; wait $$pid1 $$pid2'
 
 serve: build-ui
 	@go run ./cmd/fingerku-api --port 8080

@@ -56,7 +56,7 @@ func (c *Client) GetAttendance() ([]Attendance, error) {
 		}
 	}
 
-	var records []Attendance
+	records := make([]Attendance, 0, len(attData)/8)
 
 	switch {
 	case recordSize == 8:

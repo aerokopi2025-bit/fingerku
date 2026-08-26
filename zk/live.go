@@ -13,6 +13,8 @@ import (
 )
 
 // LiveCapture starts listening for real-time punch/attendance events and streams them over a Go channel.
+// It uses connMu to serialize conn access so that concurrent API calls (SyncAll, DisableDevice, etc.)
+// do not race with the live read loop's SetReadDeadline / Read.
 func (c *Client) LiveCapture(ctx context.Context) (<-chan Attendance, <-chan error) {
 	out := make(chan Attendance, 100)
 	errChan := make(chan error, 1)
@@ -48,20 +50,47 @@ func (c *Client) LiveCapture(ctx context.Context) (<-chan Attendance, <-chan err
 			default:
 			}
 
-			// Set read deadline for periodic context checks
-			_ = c.conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+			// Check conn still valid
+			c.mu.Lock()
+			connNil := c.conn == nil
+			isTCP := c.tcp
+			c.mu.Unlock()
+			if connNil {
+				return
+			}
+
+			// Set read deadline for periodic context checks — must hold connMu.
+			c.connMu.Lock()
+			if c.conn != nil {
+				_ = c.conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+			}
+			c.connMu.Unlock()
 
 			var header [4]uint16
 			var data []byte
+			var readErr error
 
-			if c.tcp {
+			if isTCP {
+				// TCP: read 8-byte top + payload — hold connMu for the pair.
+				c.connMu.Lock()
 				tcpHeader := make([]byte, 8)
-				if _, err := io.ReadFull(c.conn, tcpHeader); err != nil {
+				if c.conn == nil {
+					c.connMu.Unlock()
+					return
+				}
+				_, readErr = io.ReadFull(c.conn, tcpHeader)
+				if readErr != nil {
+					c.connMu.Unlock()
 					var netErr net.Error
-					if errors.As(err, &netErr) && netErr.Timeout() {
+					if errors.As(readErr, &netErr) && netErr.Timeout() {
+						select {
+						case <-ctx.Done():
+							return
+						default:
+						}
 						continue
 					}
-					if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
+					if errors.Is(readErr, io.EOF) || errors.Is(readErr, net.ErrClosed) {
 						return
 					}
 					continue
@@ -69,22 +98,36 @@ func (c *Client) LiveCapture(ctx context.Context) (<-chan Attendance, <-chan err
 
 				payloadLen, err := TestTCPTop(tcpHeader)
 				if err != nil || payloadLen < 8 {
+					c.connMu.Unlock()
 					continue
 				}
 
 				payload := make([]byte, payloadLen)
 				if _, err := io.ReadFull(c.conn, payload); err != nil {
+					c.connMu.Unlock()
 					continue
 				}
+				c.connMu.Unlock()
 
 				_ = binary.Read(bytes.NewReader(payload[:8]), binary.LittleEndian, &header)
 				data = payload[8:]
 			} else {
+				c.connMu.Lock()
+				if c.conn == nil {
+					c.connMu.Unlock()
+					return
+				}
 				udpBuf := make([]byte, 1024+8)
 				n, err := c.conn.Read(udpBuf)
+				c.connMu.Unlock()
 				if err != nil {
 					var netErr net.Error
 					if errors.As(err, &netErr) && netErr.Timeout() {
+						select {
+						case <-ctx.Done():
+							return
+						default:
+						}
 						continue
 					}
 					if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
@@ -104,7 +147,7 @@ func (c *Client) LiveCapture(ctx context.Context) (<-chan Attendance, <-chan err
 				continue
 			}
 
-			// Acknowledge receipt
+			// Acknowledge receipt (thread-safe, holds both mu+connMu internally)
 			_ = c.ackOK()
 
 			for len(data) >= 10 {
@@ -156,6 +199,8 @@ func (c *Client) LiveCapture(ctx context.Context) (<-chan Attendance, <-chan err
 						uid = num
 					}
 
+					// Modern TFT devices report fixed stride per firmware; compute from header length
+					// when available, fallback to data-length heuristics for legacy devices.
 					stride := 32
 					if len(data) == 36 {
 						stride = 36
@@ -163,6 +208,9 @@ func (c *Client) LiveCapture(ctx context.Context) (<-chan Attendance, <-chan err
 						stride = 37
 					} else if len(data) >= 52 {
 						stride = 52
+					}
+					if stride > len(data) {
+						stride = len(data)
 					}
 					data = data[stride:]
 
@@ -174,11 +222,7 @@ func (c *Client) LiveCapture(ctx context.Context) (<-chan Attendance, <-chan err
 					ts, err := DecodeTimeHex(timeHex)
 					if err == nil {
 						att := Attendance{
-							UID:       uid,
-							UserID:    userID,
-							Timestamp: ts,
-							Status:    status,
-							Punch:     punch,
+							UID: uid, UserID: userID, Timestamp: ts, Status: status, Punch: punch,
 						}
 						select {
 						case out <- att:

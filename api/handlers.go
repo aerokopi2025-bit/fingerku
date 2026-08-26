@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"time"
@@ -23,10 +24,8 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
-	s.mu.Lock()
-	connected := s.connected
-	cfg := s.config
-	s.mu.Unlock()
+	cfg := s.getConfig()
+	connected := s.IsConnected()
 
 	stats, _ := s.db.GetAttendanceStats()
 	users, _ := s.db.GetUsers()
@@ -60,11 +59,17 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Fill defaults before validation
 	if cfg.IP == "" {
-		cfg.IP = "192.168.1.201"
+		cfg.IP = storage.DefaultDeviceConfig().IP
 	}
 	if cfg.Port <= 0 {
 		cfg.Port = 4370
+	}
+
+	if err := validateDeviceConfig(cfg); err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
+		return
 	}
 
 	if err := s.db.SaveDeviceConfig(cfg); err != nil {
@@ -81,17 +86,46 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
+	storedCfg, _ := s.db.GetDeviceConfig()
+
 	var cfg storage.DeviceConfig
+	var raw map[string]json.RawMessage
+	hasBody := false
+
 	if r.Body != nil {
-		_ = json.NewDecoder(r.Body).Decode(&cfg)
+		body, _ := io.ReadAll(r.Body)
+		if len(body) > 0 {
+			hasBody = true
+			_ = json.Unmarshal(body, &cfg)
+			_ = json.Unmarshal(body, &raw)
+		}
 	}
 
-	storedCfg, _ := s.db.GetDeviceConfig()
 	if cfg.IP == "" {
 		cfg.IP = storedCfg.IP
 	}
 	if cfg.Port <= 0 {
 		cfg.Port = storedCfg.Port
+	}
+	if hasBody && raw != nil {
+		if _, ok := raw["password"]; !ok {
+			cfg.Password = storedCfg.Password
+		}
+		if _, ok := raw["udp"]; !ok {
+			cfg.UDP = storedCfg.UDP
+		}
+		if _, ok := raw["omit_ping"]; !ok {
+			cfg.OmitPing = storedCfg.OmitPing
+		}
+		if _, ok := raw["auto_connect"]; !ok {
+			cfg.AutoConnect = storedCfg.AutoConnect
+		}
+		if _, ok := raw["auto_sync_interval_sec"]; !ok {
+			cfg.AutoSyncIntervalSec = storedCfg.AutoSyncIntervalSec
+		}
+	} else if !hasBody {
+		// Empty body: use stored config entirely
+		cfg = storedCfg
 	}
 
 	if err := s.Connect(cfg); err != nil {
@@ -115,21 +149,19 @@ func (s *Server) handleDisconnect(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDeviceInfo(w http.ResponseWriter, r *http.Request) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if !s.connected || s.client == nil {
+	client, ok := s.activeDeviceClient()
+	if !ok {
 		respondError(w, http.StatusServiceUnavailable, "Device is not connected")
 		return
 	}
 
-	info, err := s.client.GetDeviceInfo()
+	info, err := client.GetDeviceInfo()
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "Failed to read device info: "+err.Error())
 		return
 	}
 
-	machTime, _ := s.client.GetTime()
+	machTime, _ := client.GetTime()
 	respondSuccess(w, http.StatusOK, map[string]interface{}{
 		"info":        info,
 		"device_time": machTime.Format("2006-01-02 15:04:05"),
@@ -137,25 +169,26 @@ func (s *Server) handleDeviceInfo(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleUnlock(w http.ResponseWriter, r *http.Request) {
+	if !s.allowUnlock(r) {
+		respondError(w, http.StatusTooManyRequests, "Too many unlock requests — please wait a moment")
+		return
+	}
+
 	var req struct {
 		Seconds int `json:"seconds"`
 	}
 	if r.Body != nil {
 		_ = json.NewDecoder(r.Body).Decode(&req)
 	}
-	if req.Seconds <= 0 {
-		req.Seconds = 3
-	}
+	req.Seconds = validateSeconds(req.Seconds)
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if !s.connected || s.client == nil {
+	client, ok := s.activeDeviceClient()
+	if !ok {
 		respondError(w, http.StatusServiceUnavailable, "Device is not connected")
 		return
 	}
 
-	if err := s.client.Unlock(req.Seconds); err != nil {
+	if err := client.Unlock(req.Seconds); err != nil {
 		respondError(w, http.StatusInternalServerError, "Failed to unlock relay: "+err.Error())
 		return
 	}
@@ -164,16 +197,14 @@ func (s *Server) handleUnlock(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSyncTime(w http.ResponseWriter, r *http.Request) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if !s.connected || s.client == nil {
+	client, ok := s.activeDeviceClient()
+	if !ok {
 		respondError(w, http.StatusServiceUnavailable, "Device is not connected")
 		return
 	}
 
 	now := time.Now()
-	if err := s.client.SetTime(now); err != nil {
+	if err := client.SetTime(now); err != nil {
 		respondError(w, http.StatusInternalServerError, "Failed to sync device time: "+err.Error())
 		return
 	}
@@ -182,22 +213,32 @@ func (s *Server) handleSyncTime(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleVoice(w http.ResponseWriter, r *http.Request) {
+	if !s.allowVoice(r) {
+		respondError(w, http.StatusTooManyRequests, "Too many voice requests — please wait a moment")
+		return
+	}
+
 	var req struct {
 		Index int `json:"index"`
 	}
 	if r.Body != nil {
 		_ = json.NewDecoder(r.Body).Decode(&req)
 	}
+	if req.Index < 0 {
+		req.Index = 0
+	}
+	if req.Index > 50 {
+		respondError(w, http.StatusBadRequest, "voice index must be between 0 and 50")
+		return
+	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if !s.connected || s.client == nil {
+	client, ok := s.activeDeviceClient()
+	if !ok {
 		respondError(w, http.StatusServiceUnavailable, "Device is not connected")
 		return
 	}
 
-	if err := s.client.TestVoice(req.Index); err != nil {
+	if err := client.TestVoice(req.Index); err != nil {
 		respondError(w, http.StatusInternalServerError, "Failed to play voice: "+err.Error())
 		return
 	}
@@ -206,36 +247,36 @@ func (s *Server) handleVoice(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleRestart(w http.ResponseWriter, r *http.Request) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if !s.connected || s.client == nil {
+	client, ok := s.activeDeviceClient()
+	if !ok {
 		respondError(w, http.StatusServiceUnavailable, "Device is not connected")
 		return
 	}
 
-	if err := s.client.Restart(); err != nil {
+	if err := client.Restart(); err != nil {
 		respondError(w, http.StatusInternalServerError, "Failed to reboot: "+err.Error())
 		return
 	}
+	s.connMu.Lock()
 	s.connected = false
+	s.connMu.Unlock()
 	respondSuccess(w, http.StatusOK, nil, "Device reboot command sent")
 }
 
 func (s *Server) handlePowerOff(w http.ResponseWriter, r *http.Request) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if !s.connected || s.client == nil {
+	client, ok := s.activeDeviceClient()
+	if !ok {
 		respondError(w, http.StatusServiceUnavailable, "Device is not connected")
 		return
 	}
 
-	if err := s.client.PowerOff(); err != nil {
+	if err := client.PowerOff(); err != nil {
 		respondError(w, http.StatusInternalServerError, "Failed to power off: "+err.Error())
 		return
 	}
+	s.connMu.Lock()
 	s.connected = false
+	s.connMu.Unlock()
 	respondSuccess(w, http.StatusOK, nil, "Device power off command sent")
 }
 
@@ -253,16 +294,14 @@ func (s *Server) handleGetUsers(w http.ResponseWriter, r *http.Request) {
 	var err error
 
 	if source == "machine" {
-		s.mu.Lock()
-		if !s.connected || s.client == nil {
-			s.mu.Unlock()
+		client, ok := s.activeDeviceClient()
+		if !ok {
 			respondError(w, http.StatusServiceUnavailable, "Device is not connected")
 			return
 		}
-		_ = s.client.DisableDevice()
-		users, err = s.client.GetUsers()
-		_ = s.client.EnableDevice()
-		s.mu.Unlock()
+		_ = client.DisableDevice()
+		users, err = client.GetUsers()
+		_ = client.EnableDevice()
 
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, "Failed to get users from machine: "+err.Error())
@@ -272,17 +311,14 @@ func (s *Server) handleGetUsers(w http.ResponseWriter, r *http.Request) {
 	} else {
 		users, err = s.db.GetUsers()
 		if err != nil || len(users) == 0 {
-			// Try fallback to device if empty
-			s.mu.Lock()
-			if s.connected && s.client != nil {
-				_ = s.client.DisableDevice()
-				users, _ = s.client.GetUsers()
-				_ = s.client.EnableDevice()
+			if client, ok := s.activeDeviceClient(); ok {
+				_ = client.DisableDevice()
+				users, _ = client.GetUsers()
+				_ = client.EnableDevice()
 				if len(users) > 0 {
 					_ = s.db.SaveUsersBatch(users)
 				}
 			}
-			s.mu.Unlock()
 		}
 	}
 
@@ -311,23 +347,37 @@ func (s *Server) handleSaveUser(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, "user_id is required")
 		return
 	}
+	if len(u.UserID) > 24 {
+		respondError(w, http.StatusBadRequest, "user_id must be at most 24 characters")
+		return
+	}
+	if len(u.Name) > 24 {
+		respondError(w, http.StatusBadRequest, "name must be at most 24 characters")
+		return
+	}
+	if u.Privilege < 0 || u.Privilege > 14 {
+		respondError(w, http.StatusBadRequest, "privilege must be between 0 and 14")
+		return
+	}
 	if u.UID == 0 {
 		if idNum, err := strconv.Atoi(u.UserID); err == nil && idNum > 0 && idNum <= 65535 {
 			u.UID = uint16(idNum)
 		}
 	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	if u.UID == 0 {
+		respondError(w, http.StatusBadRequest, "uid is required (or provide numeric user_id)")
+		return
+	}
 
 	// If connected, push to machine
-	if s.connected && s.client != nil {
-		_ = s.client.DisableDevice()
-		defer s.client.EnableDevice()
-		if err := s.client.SetUser(u); err != nil {
+	if client, ok := s.activeDeviceClient(); ok {
+		_ = client.DisableDevice()
+		if err := client.SetUser(u); err != nil {
+			_ = client.EnableDevice()
 			respondError(w, http.StatusInternalServerError, "Failed to save user to machine: "+err.Error())
 			return
 		}
+		_ = client.EnableDevice()
 	}
 
 	// Save to SQLite
@@ -368,13 +418,8 @@ func (s *Server) handleDeleteUserByID(w http.ResponseWriter, r *http.Request) {
 
 	user, _ := s.db.GetUser(id)
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if s.connected && s.client != nil {
-		_ = s.client.DisableDevice()
-		defer s.client.EnableDevice()
-
+	if client, ok := s.activeDeviceClient(); ok {
+		_ = client.DisableDevice()
 		uidNum, _ := strconv.Atoi(id)
 		var uid uint16
 		if user != nil {
@@ -384,8 +429,13 @@ func (s *Server) handleDeleteUserByID(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if uid > 0 {
-			_ = s.client.DeleteUser(uid, id)
+			if err := client.DeleteUser(uid, id); err != nil {
+				_ = client.EnableDevice()
+				respondError(w, http.StatusInternalServerError, "Failed to delete user on device: "+err.Error())
+				return
+			}
 		}
+		_ = client.EnableDevice()
 	}
 
 	var uid uint16
@@ -430,6 +480,9 @@ func (s *Server) handleGetAttendance(w http.ResponseWriter, r *http.Request) {
 	if limit <= 0 {
 		limit = 50
 	}
+	if limit > 200 {
+		limit = 200
+	}
 	offset, _ := strconv.Atoi(q.Get("offset"))
 	if offset < 0 {
 		offset = 0
@@ -437,6 +490,16 @@ func (s *Server) handleGetAttendance(w http.ResponseWriter, r *http.Request) {
 	page, _ := strconv.Atoi(q.Get("page"))
 	if page > 1 {
 		offset = (page - 1) * limit
+	}
+
+	// Validate date formats early
+	for _, key := range []string{"from", "to"} {
+		if v := q.Get(key); v != "" {
+			if _, err := time.Parse("2006-01-02", v); err != nil {
+				respondError(w, http.StatusBadRequest, fmt.Sprintf("invalid date %q: expected YYYY-MM-DD", v))
+				return
+			}
+		}
 	}
 
 	filter := storage.AttendanceFilter{
@@ -473,24 +536,35 @@ func (s *Server) handleGetAttendanceStats(w http.ResponseWriter, r *http.Request
 }
 
 func (s *Server) handleGetMachineAttendance(w http.ResponseWriter, r *http.Request) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if !s.connected || s.client == nil {
+	client, ok := s.activeDeviceClient()
+	if !ok {
 		respondError(w, http.StatusServiceUnavailable, "Device is not connected")
 		return
 	}
 
-	_ = s.client.DisableDevice()
-	defer s.client.EnableDevice()
+	_ = client.DisableDevice()
+	defer client.EnableDevice()
 
-	records, err := s.client.GetAttendance()
+	records, err := client.GetAttendance()
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "Failed to read records from device RAM: "+err.Error())
 		return
 	}
 
 	respondSuccess(w, http.StatusOK, records)
+}
+
+func (s *Server) handleClearMachineAttendance(w http.ResponseWriter, r *http.Request) {
+	if err := s.ClearMachineAttendance(); err != nil {
+		// Distinguish not-connected vs device error
+		if err.Error() == "perangkat tidak terhubung" {
+			respondError(w, http.StatusServiceUnavailable, err.Error())
+			return
+		}
+		respondError(w, http.StatusInternalServerError, "Failed to clear attendance on device: "+err.Error())
+		return
+	}
+	respondSuccess(w, http.StatusOK, map[string]interface{}{"cleared": true}, "Attendance logs cleared on device")
 }
 
 func (s *Server) handleTriggerSync(w http.ResponseWriter, r *http.Request) {
@@ -506,6 +580,9 @@ func (s *Server) handleGetSyncHistory(w http.ResponseWriter, r *http.Request) {
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	if limit <= 0 {
 		limit = 20
+	}
+	if limit > 100 {
+		limit = 100
 	}
 	history, err := s.db.GetSyncHistory(limit)
 	if err != nil {
@@ -526,6 +603,7 @@ func (s *Server) handleSSELiveEvents(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("X-Accel-Buffering", "no")
 
 	clientChan := s.broker.subscribe()
 	defer s.broker.unsubscribe(clientChan)
