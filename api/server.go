@@ -91,8 +91,7 @@ type Server struct {
 
 	// Rate limiters per IP for hardware-mutating actions.
 	rlMu           sync.Mutex
-	unlockLimiters map[string]*rate.Limiter
-	voiceLimiters  map[string]*rate.Limiter
+	actionLimiters map[string]*rate.Limiter
 
 	// Configurable CORS and auth.
 	corsOrigins []string
@@ -130,8 +129,7 @@ func NewServer(db *storage.DB, verbose bool) (*Server, error) {
 		broker:         newSSEBroker(),
 		startTime:      time.Now(),
 		verbose:        verbose,
-		unlockLimiters: make(map[string]*rate.Limiter),
-		voiceLimiters:  make(map[string]*rate.Limiter),
+		actionLimiters: make(map[string]*rate.Limiter),
 		corsOrigins:    origins,
 		apiToken:       strings.TrimSpace(os.Getenv("API_TOKEN")),
 		liveBackoff:    2 * time.Second,
@@ -609,40 +607,38 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 
 // Per-IP rate limit helpers.
 
-func (s *Server) allowUnlock(r *http.Request) bool {
+// actionRate returns the rate limit interval/burst for a device action.
+func actionRate(name string) (time.Duration, int) {
+	switch name {
+	case "unlock":
+		return 2 * time.Second, 1
+	case "voice":
+		return time.Second, 2
+	default:
+		return time.Second, 3
+	}
+}
+
+// allowAction enforces a per-IP rate limit for a hardware-mutating action.
+func (s *Server) allowAction(r *http.Request, name string) bool {
 	ip := clientIP(r)
+	every, burst := actionRate(name)
 	s.rlMu.Lock()
 	defer s.rlMu.Unlock()
-	lim, ok := s.unlockLimiters[ip]
+	key := name + ":" + ip
+	lim, ok := s.actionLimiters[key]
 	if !ok {
-		lim = rate.NewLimiter(rate.Every(2*time.Second), 1)
-		s.unlockLimiters[ip] = lim
+		lim = rate.NewLimiter(rate.Every(every), burst)
+		s.actionLimiters[key] = lim
 	}
 	return lim.Allow()
 }
 
-func (s *Server) allowVoice(r *http.Request) bool {
-	ip := clientIP(r)
-	s.rlMu.Lock()
-	defer s.rlMu.Unlock()
-	lim, ok := s.voiceLimiters[ip]
-	if !ok {
-		lim = rate.NewLimiter(rate.Every(time.Second), 2)
-		s.voiceLimiters[ip] = lim
-	}
-	return lim.Allow()
-}
-
+// clientIP returns the connecting client's IP. Client-supplied headers
+// (X-Forwarded-For / X-Real-IP) are not trusted here because they can be
+// spoofed to bypass per-IP rate limits. The chi RealIP middleware rewrites
+// RemoteAddr using the trusted proxy headers before this runs.
 func clientIP(r *http.Request) string {
-	if v := r.Header.Get("X-Forwarded-For"); v != "" {
-		if idx := strings.Index(v, ","); idx != -1 {
-			return strings.TrimSpace(v[:idx])
-		}
-		return strings.TrimSpace(v)
-	}
-	if v := r.Header.Get("X-Real-IP"); v != "" {
-		return strings.TrimSpace(v)
-	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr

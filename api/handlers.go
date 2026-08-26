@@ -169,7 +169,7 @@ func (s *Server) handleDeviceInfo(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleUnlock(w http.ResponseWriter, r *http.Request) {
-	if !s.allowUnlock(r) {
+	if !s.allowAction(r, "unlock") {
 		respondError(w, http.StatusTooManyRequests, "Too many unlock requests — please wait a moment")
 		return
 	}
@@ -197,6 +197,10 @@ func (s *Server) handleUnlock(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSyncTime(w http.ResponseWriter, r *http.Request) {
+	if !s.allowAction(r, "synctime") {
+		respondError(w, http.StatusTooManyRequests, "Too many synctime requests — please wait a moment")
+		return
+	}
 	client, ok := s.activeDeviceClient()
 	if !ok {
 		respondError(w, http.StatusServiceUnavailable, "Device is not connected")
@@ -213,7 +217,7 @@ func (s *Server) handleSyncTime(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleVoice(w http.ResponseWriter, r *http.Request) {
-	if !s.allowVoice(r) {
+	if !s.allowAction(r, "voice") {
 		respondError(w, http.StatusTooManyRequests, "Too many voice requests — please wait a moment")
 		return
 	}
@@ -247,6 +251,10 @@ func (s *Server) handleVoice(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleRestart(w http.ResponseWriter, r *http.Request) {
+	if !s.allowAction(r, "restart") {
+		respondError(w, http.StatusTooManyRequests, "Too many restart requests — please wait a moment")
+		return
+	}
 	client, ok := s.activeDeviceClient()
 	if !ok {
 		respondError(w, http.StatusServiceUnavailable, "Device is not connected")
@@ -264,6 +272,10 @@ func (s *Server) handleRestart(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePowerOff(w http.ResponseWriter, r *http.Request) {
+	if !s.allowAction(r, "poweroff") {
+		respondError(w, http.StatusTooManyRequests, "Too many poweroff requests — please wait a moment")
+		return
+	}
 	client, ok := s.activeDeviceClient()
 	if !ok {
 		respondError(w, http.StatusServiceUnavailable, "Device is not connected")
@@ -410,6 +422,10 @@ func (s *Server) handleGetUserByID(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDeleteUserByID(w http.ResponseWriter, r *http.Request) {
+	if !s.allowAction(r, "deleteuser") {
+		respondError(w, http.StatusTooManyRequests, "Too many delete requests — please wait a moment")
+		return
+	}
 	id := chi.URLParam(r, "id")
 	if id == "" {
 		respondError(w, http.StatusBadRequest, "User ID is required")
@@ -555,6 +571,10 @@ func (s *Server) handleGetMachineAttendance(w http.ResponseWriter, r *http.Reque
 }
 
 func (s *Server) handleClearMachineAttendance(w http.ResponseWriter, r *http.Request) {
+	if !s.allowAction(r, "clearattendance") {
+		respondError(w, http.StatusTooManyRequests, "Too many requests — please wait a moment")
+		return
+	}
 	if err := s.ClearMachineAttendance(); err != nil {
 		// Distinguish not-connected vs device error
 		if err.Error() == "perangkat tidak terhubung" {
@@ -568,6 +588,10 @@ func (s *Server) handleClearMachineAttendance(w http.ResponseWriter, r *http.Req
 }
 
 func (s *Server) handleTriggerSync(w http.ResponseWriter, r *http.Request) {
+	if !s.allowAction(r, "sync") {
+		respondError(w, http.StatusTooManyRequests, "Too many sync requests — please wait a moment")
+		return
+	}
 	res, err := s.SyncAll()
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "Sync failed: "+err.Error())
